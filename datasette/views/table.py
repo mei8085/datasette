@@ -972,6 +972,8 @@ async def table_view_traced(datasette, request):
         else:
             raise
 
+    actor_ctx = ActorContext(datasette, request.actor)
+
     if request.method == "POST":
         return Response.text("Method not allowed", status=405)
 
