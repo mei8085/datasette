@@ -188,6 +188,19 @@ class ColumnFacet(Facet):
                     # And at least one has n > 1
                     and any(r["n"] > 1 for r in distinct_values)
                 ):
+                    counts = [r["n"] for r in distinct_values]
+                    total = sum(counts)
+                    if total > 0:
+                        max_count = max(counts)
+                        uniformity = 1 - (max_count / total)
+                        if row_count > 1:
+                            cardinality_score = 1 - (num_distinct_values / row_count)
+                        else:
+                            cardinality_score = 0
+                        quality_score = uniformity * 0.6 + cardinality_score * 0.4
+                    else:
+                        quality_score = 0
+                    
                     suggested_facets.append(
                         {
                             "name": column,
@@ -196,14 +209,15 @@ class ColumnFacet(Facet):
                                 self.ds.urls.path(
                                     path_with_added_args(
                                         self.request, {"_facet": column}
-                                    )
                                 ),
                             ),
+                            "quality_score": quality_score,
                         }
                     )
             except QueryInterrupted:
                 continue
-        return suggested_facets
+        suggested_facets.sort(key=lambda x: x["quality_score"], reverse=True)
+        return [{"name": f["name"], "toggle_url": f["toggle_url"]} for f in suggested_facets]
 
     async def get_row_count(self):
         if self.row_count is None:

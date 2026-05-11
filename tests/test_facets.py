@@ -734,3 +734,39 @@ async def test_facet_only_considers_first_x_rows():
         assert data2["suggested_facets"] == []
     finally:
         Facet.suggest_consider = original_suggest_consider
+
+
+@pytest.mark.asyncio
+async def test_suggested_facets_sorted_by_quality():
+    ds = Datasette()
+    db = ds.add_memory_database("test_facet_quality")
+    await db.execute_write(
+        "create table t (id integer primary key, good_facet text, bad_facet text, medium_facet text)"
+    )
+    # 准备数据：
+    # good_facet: 均匀分布（4个值，每个3行）
+    # medium_facet: 不太均匀（3个值，一个占多数
+    # bad_facet: 非常不均匀（2个值，一个占绝大多数）
+    to_insert = []
+    for i in range(12):
+        good_facet = ["A", "B", "C", "D"][i % 4]
+        medium_facet = ["X", "X", "X", "X", "Y", "Y", "Y", "Z", "Z", "X", "X", "Y"][i]
+        bad_facet = "M" if i < 10 else "N"
+        to_insert.append({
+            "good_facet": good_facet,
+            "medium_facet": medium_facet,
+            "bad_facet": bad_facet
+        })
+    await db.execute_write_many(
+        "insert into t (good_facet, medium_facet, bad_facet) values (:good_facet, :medium_facet, :bad_facet)",
+        to_insert
+    )
+    response = await ds.client.get(
+        "/test_facet_quality/t.json?_extra=suggested_facets"
+    )
+    data = response.json()
+    suggested_names = [f["name"] for f in data["suggested_facets"]]
+    # good_facet 应该排在最前面，因为它分布最均匀
+    assert suggested_names[0] == "good_facet"
+    # bad_facet 应该排在最后，因为它分布最不均匀
+    assert suggested_names[-1] == "bad_facet"
