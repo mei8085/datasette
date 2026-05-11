@@ -5,33 +5,6 @@ from datasette import hookimpl
 from datasette.utils.asgi import Response
 
 
-@hookimpl
-def register_output_renderer(datasette):
-    renderers = []
-
-    try:
-        import openpyxl
-        renderers.append({
-            "extension": "xlsx",
-            "render": render_excel,
-            "can_render": lambda **kwargs: True,
-        })
-    except ImportError:
-        pass
-
-    try:
-        import pyarrow
-        renderers.append({
-            "extension": "parquet",
-            "render": render_parquet,
-            "can_render": lambda **kwargs: True,
-        })
-    except ImportError:
-        pass
-
-    return renderers
-
-
 def serialize_value(value):
     if value is None:
         return None
@@ -56,8 +29,14 @@ async def render_excel(
     view_name,
     data,
 ):
-    import openpyxl
-    from openpyxl.utils import get_column_letter
+    try:
+        import openpyxl
+    except ImportError:
+        return Response(
+            "openpyxl not installed. Install it with: pip install openpyxl",
+            status=500,
+            content_type="text/plain",
+        )
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -98,8 +77,15 @@ async def render_parquet(
     view_name,
     data,
 ):
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError:
+        return Response(
+            "pyarrow not installed. Install it with: pip install pyarrow",
+            status=500,
+            content_type="text/plain",
+        )
 
     column_names = [str(col) for col in columns]
 
@@ -124,3 +110,30 @@ async def render_parquet(
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+@hookimpl
+def register_output_renderer():
+    renderers = []
+
+    try:
+        import openpyxl
+        renderers.append({
+            "extension": "xlsx",
+            "render": render_excel,
+            "can_render": lambda **kwargs: True,
+        })
+    except ImportError:
+        pass
+
+    try:
+        import pyarrow
+        renderers.append({
+            "extension": "parquet",
+            "render": render_parquet,
+            "can_render": lambda **kwargs: True,
+        })
+    except ImportError:
+        pass
+
+    return renderers

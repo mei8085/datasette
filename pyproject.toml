@@ -85,6 +85,8 @@ dev = [
 
 [project.optional-dependencies]
 rich = ["rich"]
+excel = ["openpyxl>=3.0"]
+parquet = ["pyarrow>=10.0"]
 
 [build-system]
 requires = ["setuptools"]

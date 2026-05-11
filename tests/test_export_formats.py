@@ -1,5 +1,4 @@
 import io
-import json
 import pytest
 
 try:
@@ -16,21 +15,11 @@ except ImportError:
     HAS_PYARROW = False
 
 from datasette.app import Datasette
-import pathlib
-
-PLUGINS_DIR = str(pathlib.Path(__file__).parent / "plugins")
-
-
-@pytest.fixture
-async def ds_client():
-    ds = Datasette(plugins_dir=PLUGINS_DIR)
-    await ds.invoke_startup()
-    return ds.client
 
 
 @pytest.fixture
 async def ds_client_with_data():
-    ds = Datasette(plugins_dir=PLUGINS_DIR)
+    ds = Datasette()
     db = ds.add_memory_database("test_db")
     await db.execute_write_script("""
         CREATE TABLE test_table (
@@ -155,8 +144,9 @@ async def test_parquet_renderer_in_renderers_list(ds_client_with_data):
 
 @pytest.mark.skipif(not HAS_OPENPYXL, reason="openpyxl not installed")
 @pytest.mark.asyncio
-async def test_excel_export_complex_data(ds_client):
-    db = ds_client.ds.add_memory_database("complex_db")
+async def test_excel_export_complex_data():
+    ds = Datasette()
+    db = ds.add_memory_database("complex_db")
     await db.execute_write_script("""
         CREATE TABLE complex_table (
             id INTEGER PRIMARY KEY,
@@ -167,9 +157,10 @@ async def test_excel_export_complex_data(ds_client):
         INSERT INTO complex_table (id, json_data, null_field, timestamp) 
         VALUES (1, '{"key": "value"}', NULL, '2023-01-01 12:00:00');
     """)
-    await ds_client.ds.refresh_schemas()
+    await ds.invoke_startup()
+    client = ds.client
     
-    response = await ds_client.get("/complex_db/complex_table.xlsx")
+    response = await client.get("/complex_db/complex_table.xlsx")
     assert response.status_code == 200
 
     wb = openpyxl.load_workbook(io.BytesIO(response.content))
@@ -187,8 +178,9 @@ async def test_excel_export_complex_data(ds_client):
 
 @pytest.mark.skipif(not HAS_PYARROW, reason="pyarrow not installed")
 @pytest.mark.asyncio
-async def test_parquet_export_complex_data(ds_client):
-    db = ds_client.ds.add_memory_database("complex_db")
+async def test_parquet_export_complex_data():
+    ds = Datasette()
+    db = ds.add_memory_database("complex_db")
     await db.execute_write_script("""
         CREATE TABLE complex_table (
             id INTEGER PRIMARY KEY,
@@ -198,9 +190,10 @@ async def test_parquet_export_complex_data(ds_client):
         INSERT INTO complex_table (id, json_data, null_field) 
         VALUES (1, '{"key": "value"}', NULL);
     """)
-    await ds_client.ds.refresh_schemas()
+    await ds.invoke_startup()
+    client = ds.client
     
-    response = await ds_client.get("/complex_db/complex_table.parquet")
+    response = await client.get("/complex_db/complex_table.parquet")
     assert response.status_code == 200
 
     table = pq.read_table(io.BytesIO(response.content))
@@ -210,3 +203,33 @@ async def test_parquet_export_complex_data(ds_client):
     assert data[0]["id"] == 1
     assert data[0]["json_data"] == '{"key": "value"}'
     assert data[0]["null_field"] is None
+
+
+@pytest.mark.skipif(not HAS_OPENPYXL, reason="openpyxl not installed")
+@pytest.mark.asyncio
+async def test_renderers_registered_in_core():
+    ds = Datasette()
+    await ds.invoke_startup()
+    
+    assert "xlsx" in ds.renderers
+    assert "parquet" in ds.renderers or not HAS_PYARROW
+
+
+@pytest.mark.skipif(not HAS_OPENPYXL, reason="openpyxl not installed")
+@pytest.mark.asyncio
+async def test_excel_export_with_existing_fixtures(ds_client):
+    response = await ds_client.get("/fixtures/simple_primary_key.xlsx")
+    assert response.status_code == 200
+    
+    wb = openpyxl.load_workbook(io.BytesIO(response.content))
+    ws = wb.active
+    
+    headers = [cell.value for cell in ws[1]]
+    assert headers == ["id", "content"]
+    
+    data = []
+    for row in ws.iter_rows(min_row=2, max_row=3, values_only=True):
+        data.append(row)
+    
+    assert (1, "hello") in data
+    assert (2, "world") in data
