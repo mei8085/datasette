@@ -2,6 +2,27 @@ var rowCommentsSidebar = null;
 var currentRowInfo = null;
 var csrftoken = null;
 
+function getRowCommentsConfig() {
+  return window.ROW_COMMENTS_CONFIG || {
+    base_url: "/",
+  };
+}
+
+function buildUrl(path) {
+  var config = getRowCommentsConfig();
+  var base_url = config.base_url || "/";
+  if (base_url === "/") {
+    return path;
+  }
+  if (base_url.endsWith("/") && path.startsWith("/")) {
+    return base_url + path.substring(1);
+  }
+  if (!base_url.endsWith("/") && !path.startsWith("/")) {
+    return base_url + "/" + path;
+  }
+  return base_url + path;
+}
+
 function getCsrfToken() {
   if (csrftoken) return csrftoken;
   var cookies = document.cookie.split(";");
@@ -82,31 +103,10 @@ function ensureRowCommentsSidebar() {
 
   var sidebar = document.createElement("div");
   sidebar.className = "row-comments-sidebar";
-  sidebar.innerHTML = `
-    <div class="row-comments-header">
-      <h3 class="row-comments-title">Row Comments</h3>
-      <button class="row-comments-close btn btn-ghost" aria-label="Close">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-    </div>
-    <div class="row-comments-info"></div>
-    <div class="row-comments-list"></div>
-    <div class="row-comments-form-container">
-      <div class="row-comments-form-not-logged-in" hidden>
-        <p>Please <a href="/-/login">log in</a> to add a comment.</p>
-      </div>
-      <form class="row-comments-form">
-        <textarea class="row-comments-input" placeholder="Add a comment..." rows="3"></textarea>
-        <div class="row-comments-form-actions">
-          <button type="submit" class="btn btn-primary row-comments-submit">Post Comment</button>
-        </div>
-      </form>
-      <div class="row-comments-error" hidden></div>
-    </div>
-  `;
+  sidebar.innerHTML =
+    '\n    <div class="row-comments-header">\n      <h3 class="row-comments-title">Row Comments</h3>\n      <button class="row-comments-close btn btn-ghost" aria-label="Close">\n        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">\n          <line x1="18" y1="6" x2="6" y2="18"></line>\n          <line x1="6" y1="6" x2="18" y2="18"></line>\n        </svg>\n      </button>\n    </div>\n    <div class="row-comments-info"></div>\n    <div class="row-comments-list"></div>\n    <div class="row-comments-form-container">\n      <div class="row-comments-form-not-logged-in" hidden>\n        <p>Please <a href="' +
+    buildUrl("/-/login") +
+    '">log in</a> to add a comment.</p>\n      </div>\n      <form class="row-comments-form">\n        <textarea class="row-comments-input" placeholder="Add a comment..." rows="3"></textarea>\n        <div class="row-comments-form-actions">\n          <button type="submit" class="btn btn-primary row-comments-submit">Post Comment</button>\n        </div>\n      </form>\n      <div class="row-comments-error" hidden></div>\n    </div>\n  ';
 
   overlay.appendChild(sidebar);
   document.body.appendChild(overlay);
@@ -139,7 +139,7 @@ function ensureRowCommentsSidebar() {
 
 async function getCurrentActor() {
   try {
-    var response = await fetch("/-/actor.json");
+    var response = await fetch(buildUrl("/-/actor.json"));
     if (response.ok) {
       var data = await response.json();
       return data.actor;
@@ -197,6 +197,7 @@ async function loadComments() {
       "/" +
       currentRowInfo.pkValues +
       "/-/comments";
+    url = buildUrl(url);
     var response = await fetch(url, {
       headers: {
         Accept: "application/json",
@@ -265,6 +266,7 @@ async function submitComment() {
       "/" +
       currentRowInfo.pkValues +
       "/-/comments";
+    url = buildUrl(url);
 
     var headers = {
       "Content-Type": "application/json",
@@ -308,7 +310,7 @@ async function deleteComment(commentId) {
   }
 
   try {
-    var url = "/-/comments/" + commentId;
+    var url = buildUrl("/-/comments/" + commentId);
     var headers = {
       Accept: "application/json",
     };
@@ -342,10 +344,29 @@ function showCommentError(message) {
   sidebar.error.hidden = false;
 }
 
+function extractPathAfterBaseUrl(pathname) {
+  var config = getRowCommentsConfig();
+  var base_url = config.base_url || "/";
+
+  if (base_url === "/") {
+    return pathname;
+  }
+
+  if (base_url.endsWith("/")) {
+    base_url = base_url.slice(0, -1);
+  }
+
+  if (pathname.indexOf(base_url) === 0) {
+    return pathname.slice(base_url.length) || "/";
+  }
+
+  return pathname;
+}
+
 function addCommentButtons() {
   var rows = document.querySelectorAll("table.rows-and-columns tbody tr");
-  var basePath = window.DATASETTE_BASE_URL || "";
-  var pathParts = window.location.pathname.replace(/^\/+/, "").split("/");
+  var effectivePath = extractPathAfterBaseUrl(window.location.pathname);
+  var pathParts = effectivePath.replace(/^\/+/, "").split("/");
   var database = pathParts[0] ? decodeURIComponent(pathParts[0]) : "";
   var table = pathParts[1] ? decodeURIComponent(pathParts[1]) : "";
 
@@ -364,7 +385,8 @@ function addCommentButtons() {
     if (link) {
       var href = link.getAttribute("href");
       if (href) {
-        var parts = href.split("/").filter(Boolean);
+        var effectiveHref = extractPathAfterBaseUrl(href);
+        var parts = effectiveHref.split("/").filter(Boolean);
         pkValues = parts[parts.length - 1];
         rowDisplay = link.textContent.trim();
       }

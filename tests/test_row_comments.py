@@ -18,6 +18,19 @@ async def ds_with_comments():
     return ds
 
 
+@pytest_asyncio.fixture
+async def ds_with_comments_prefix():
+    ds = Datasette(memory=True, settings={"num_sql_threads": 1, "base_url": "/prefix/"})
+    db = ds.add_database(Database(ds, memory_name="test_db"), name="test_db")
+    
+    await db.execute_write("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT)")
+    await db.execute_write("INSERT INTO test_table (id, name) VALUES (1, 'Row 1')")
+    await db.execute_write("INSERT INTO test_table (id, name) VALUES (2, 'Row 2')")
+    
+    await ds.invoke_startup()
+    return ds
+
+
 @pytest.mark.asyncio
 async def test_get_comments_unauthenticated(ds_with_comments):
     client = ds_with_comments.client
@@ -237,3 +250,92 @@ async def test_invalid_comment_id(ds_with_comments):
         cookies={"ds_actor": actor_cookie},
     )
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_prefix_url_get_comments(ds_with_comments_prefix):
+    client = ds_with_comments_prefix.client
+    
+    response = await client.get("/prefix/test_db/test_table/1/-/comments")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["database"] == "test_db"
+    assert data["table"] == "test_table"
+    assert data["pk_values"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_prefix_url_post_and_get_comments(ds_with_comments_prefix):
+    client = ds_with_comments_prefix.client
+    
+    actor_cookie = client.actor_cookie({"id": "prefix_user", "name": "Prefix User"})
+    
+    response = await client.post(
+        "/prefix/test_db/test_table/1/-/comments",
+        json={"comment_text": "Prefix comment"},
+        cookies={"ds_actor": actor_cookie},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["ok"] is True
+    assert data["comment"]["comment_text"] == "Prefix comment"
+    assert data["comment"]["actor_id"] == "prefix_user"
+    
+    comment_id = data["comment"]["id"]
+    
+    response = await client.get("/prefix/test_db/test_table/1/-/comments")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["comments"]) == 1
+    assert data["comments"][0]["comment_text"] == "Prefix comment"
+    
+    response = await client.delete(
+        f"/prefix/-/comments/{comment_id}",
+        cookies={"ds_actor": actor_cookie},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    
+    response = await client.get("/prefix/test_db/test_table/1/-/comments")
+    data = response.json()
+    assert len(data["comments"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_prefix_url_non_prefixed_url_fails(ds_with_comments_prefix):
+    client = ds_with_comments_prefix.client
+    
+    response = await client.get("/test_db/test_table/1/-/comments")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_prefix_url_delete_requires_auth(ds_with_comments_prefix):
+    client = ds_with_comments_prefix.client
+    
+    actor_cookie = client.actor_cookie({"id": "user1"})
+    response = await client.post(
+        "/prefix/test_db/test_table/1/-/comments",
+        json={"comment_text": "Test"},
+        cookies={"ds_actor": actor_cookie},
+    )
+    comment_id = response.json()["comment"]["id"]
+    
+    response = await client.delete(f"/prefix/-/comments/{comment_id}")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_prefix_url_post_requires_authentication(ds_with_comments_prefix):
+    client = ds_with_comments_prefix.client
+    
+    response = await client.post(
+        "/prefix/test_db/test_table/1/-/comments",
+        json={"comment_text": "Test comment"},
+    )
+    assert response.status_code == 401
+    data = response.json()
+    assert data["ok"] is False
+    assert "Authentication required" in data["error"]
