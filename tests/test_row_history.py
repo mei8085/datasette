@@ -404,3 +404,96 @@ async def test_history_and_revert_with_special_characters_in_pk(ds_write_special
     assert revert_data["ok"] is True
     assert revert_data["row"]["title"] == "Original title"
     assert revert_data["row"]["score"] == 1.0
+
+
+@pytest.fixture
+def ds_write_rowid(tmp_path_factory):
+    db_directory = tmp_path_factory.mktemp("dbs")
+    db_path = str(db_directory / "data.db")
+    db1 = sqlite3.connect(str(db_path))
+    db1.execute(
+        "create table rowid_docs (title text, score float)"
+    )
+    db1.close()
+    ds = Datasette([db_path])
+    ds.root_enabled = True
+    yield ds
+    ds.close()
+
+
+@pytest.mark.asyncio
+async def test_history_and_revert_with_rowid_table(ds_write_rowid):
+    insert_response = await ds_write_rowid.client.post(
+        "/data/rowid_docs/-/insert",
+        json={
+            "row": {
+                "title": "Original title",
+                "score": 1.0,
+            },
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_rowid)),
+    )
+    assert insert_response.status_code == 201
+
+    query_response = await ds_write_rowid.client.get(
+        "/data/rowid_docs.json?_shape=array",
+        headers=_headers(write_token(ds_write_rowid, permissions=["vi", "vt"])),
+    )
+    assert query_response.status_code == 200
+    rows = query_response.json()
+    assert len(rows) == 1
+    rowid = rows[0]["rowid"]
+
+    update_response = await ds_write_rowid.client.post(
+        "/data/rowid_docs/{}/-/update".format(rowid),
+        json={
+            "update": {
+                "title": "Updated title",
+                "score": 2.0,
+            },
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_rowid)),
+    )
+    assert update_response.status_code == 200
+
+    history_response = await ds_write_rowid.client.get(
+        "/data/rowid_docs/{}/-/history".format(rowid),
+        headers=_headers(write_token(ds_write_rowid, permissions=["vi", "vt"])),
+    )
+    assert history_response.status_code == 200
+    history_data = history_response.json()
+    assert history_data["ok"] is True
+    assert len(history_data["history"]) == 1
+    assert history_data["history"][0]["row_data"]["title"] == "Original title"
+    assert history_data["history"][0]["row_data"]["score"] == 1.0
+
+    history_id = history_data["history"][0]["id"]
+    diff_response = await ds_write_rowid.client.get(
+        "/data/rowid_docs/{}/-/history-diff?history_id={}".format(
+            rowid, history_id
+        ),
+        headers=_headers(write_token(ds_write_rowid, permissions=["vi", "vt"])),
+    )
+    assert diff_response.status_code == 200
+    diff_data = diff_response.json()
+    assert diff_data["ok"] is True
+    assert "changed" in diff_data["diff"]
+    assert "title" in diff_data["diff"]["changed"]
+    assert diff_data["diff"]["changed"]["title"]["old"] == "Original title"
+    assert diff_data["diff"]["changed"]["title"]["new"] == "Updated title"
+
+    revert_response = await ds_write_rowid.client.post(
+        "/data/rowid_docs/{}/-/revert".format(rowid),
+        json={
+            "history_id": history_id,
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_rowid)),
+    )
+    assert revert_response.status_code == 200
+    revert_data = revert_response.json()
+    assert revert_data["ok"] is True
+    assert revert_data["row"]["title"] == "Original title"
+    assert revert_data["row"]["score"] == 1.0

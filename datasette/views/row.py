@@ -211,7 +211,9 @@ class RowView(DataView):
             history = await get_row_history(
                 self.ds, database, table, pk_values
             )
-            pk_path = path_from_row_pks(rows[0], resolved.pks, False)
+            original_pks = await db.primary_keys(table)
+            use_rowid = not original_pks
+            pk_path = path_from_row_pks(rows[0], original_pks, use_rowid)
             return {
                 "private": private,
                 "columns": reordered_columns,
