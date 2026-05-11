@@ -1,9 +1,7 @@
 import asyncio
 import csv
 import hashlib
-import json
 import sys
-import urllib
 
 from datasette.utils import (
     add_cors_headers,
@@ -12,13 +10,13 @@ from datasette.utils import (
     EscapeHtmlWriter,
     LimitedWriter,
     path_from_row_pks,
-    path_with_added_args,
     path_with_format,
-    sqlite3,
 )
 from datasette.utils.asgi import (
     AsgiStream,
+    BadRequest,
     NotFound,
+    Request,
     Response,
 )
 
@@ -43,33 +41,21 @@ async def stream_csv(
             new_query_string = request.query_string + "&" + "&".join(extra_parameters)
         new_scope = dict(request.scope, query_string=new_query_string.encode("latin-1"))
         receive = request.receive
-        from datasette.utils.asgi import Request
-
         request = Request(new_scope, receive)
     if stream:
         if not datasette.setting("allow_csv_stream"):
-            from datasette.utils.asgi import BadRequest
-
             raise BadRequest("CSV streaming is disabled")
         if request.args.get("_next"):
-            from datasette.utils.asgi import BadRequest
-
             raise BadRequest("_next not allowed for CSV streaming")
         kwargs["_size"] = "max"
-    try:
-        response_or_template_contexts = await fetch_data(request)
-        if isinstance(response_or_template_contexts, Response):
-            return response_or_template_contexts
-        elif len(response_or_template_contexts) == 4:
-            data, _, _, _ = response_or_template_contexts
-        else:
-            data, _, _ = response_or_template_contexts
-    except (sqlite3.OperationalError, Exception) as e:
-        from datasette.views.base import DatasetteError, InvalidSql
 
-        if isinstance(e, (sqlite3.OperationalError, InvalidSql)):
-            raise DatasetteError(str(e), title="Invalid SQL", status=400)
-        raise
+    response_or_template_contexts = await fetch_data(request)
+    if isinstance(response_or_template_contexts, Response):
+        return response_or_template_contexts
+    elif len(response_or_template_contexts) == 4:
+        data, _, _, _ = response_or_template_contexts
+    else:
+        data, _, _ = response_or_template_contexts
 
     headings = data["columns"]
     expanded_columns = set(data.get("expanded_columns") or [])
@@ -203,8 +189,6 @@ async def render_response(
     view_name,
     fetch_data_fn=None,
     database_route=None,
-    extra_template_data=None,
-    templates=None,
     status_code=None,
     error=None,
     truncated=None,
