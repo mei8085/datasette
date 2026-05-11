@@ -24,6 +24,7 @@ DEFAULT_PLUGINS = (
     "datasette.actor_auth_cookie",
     "datasette.default_permissions",
     "datasette.default_permissions.tokens",
+    "datasette.default_permissions.saved_queries",
     "datasette.default_actions",
     "datasette.default_column_types",
     "datasette.default_magic_parameters",

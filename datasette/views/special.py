@@ -1205,7 +1205,7 @@ class SaveQueryView(BaseView):
         )
 
 
-class ShortlinkRedirectView(View):
+class ShortlinkRedirectView(BaseView):
     """
     Redirect a shortlink to the corresponding query execution.
 
@@ -1213,12 +1213,14 @@ class ShortlinkRedirectView(View):
     which will use the existing canned query permission checks.
     """
 
-    async def get(self, request, datasette):
+    name = "shortlink_redirect"
+
+    async def get(self, request):
         from datasette.default_permissions import get_saved_query
         from urllib.parse import urlencode
 
         slug = request.url_vars["slug"]
-        saved_query = await get_saved_query(datasette, slug)
+        saved_query = await get_saved_query(self.ds, slug)
 
         if saved_query is None:
             return Response.text("Shortlink not found", status=404)

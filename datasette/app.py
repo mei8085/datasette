@@ -2243,7 +2243,7 @@ class Datasette:
             r"/-/patterns$",
         )
         add_route(
-            wrap_view(ShortlinkRedirectView, self),
+            ShortlinkRedirectView.as_view(self),
             r"/-/q/(?P<slug>[^\/\.]+)$",
         )
         add_route(

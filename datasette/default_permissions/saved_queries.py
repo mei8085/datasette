@@ -23,6 +23,21 @@ SHORTLINK_CHARS = string.ascii_lowercase + string.ascii_uppercase + string.digit
 SHORTLINK_LENGTH = 8
 
 
+async def _ensure_saved_queries_table(internal_db):
+    """Ensure the saved_queries table exists."""
+    await internal_db.execute_write_script(
+        """
+        CREATE TABLE IF NOT EXISTS saved_queries (
+            slug TEXT PRIMARY KEY,
+            database_name TEXT NOT NULL,
+            sql TEXT NOT NULL,
+            params TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
 def generate_shortlink(length: int = SHORTLINK_LENGTH) -> str:
     """Generate a random shortlink alias."""
     return "".join(secrets.choice(SHORTLINK_CHARS) for _ in range(length))
@@ -49,6 +64,7 @@ async def save_query(
         The shortlink alias (slug)
     """
     internal_db = datasette.get_internal_database()
+    await _ensure_saved_queries_table(internal_db)
 
     if slug is None:
         slug = generate_shortlink()
@@ -85,6 +101,7 @@ async def get_saved_query(
         Dictionary with database_name, sql, and params, or None if not found
     """
     internal_db = datasette.get_internal_database()
+    await _ensure_saved_queries_table(internal_db)
     result = await internal_db.execute(
         """
         SELECT slug, database_name, sql, params
@@ -123,6 +140,7 @@ async def get_saved_queries(
         List of saved query dictionaries
     """
     internal_db = datasette.get_internal_database()
+    await _ensure_saved_queries_table(internal_db)
 
     if database_name:
         result = await internal_db.execute(
@@ -171,6 +189,7 @@ async def delete_saved_query(datasette: "Datasette", slug: str) -> bool:
         True if deleted, False if not found
     """
     internal_db = datasette.get_internal_database()
+    await _ensure_saved_queries_table(internal_db)
     result = await internal_db.execute_write(
         "DELETE FROM saved_queries WHERE slug = ?",
         [slug],
@@ -180,6 +199,7 @@ async def delete_saved_query(datasette: "Datasette", slug: str) -> bool:
 
 async def _slug_exists(internal_db, slug: str) -> bool:
     """Check if a slug already exists."""
+    await _ensure_saved_queries_table(internal_db)
     result = await internal_db.execute(
         "SELECT 1 FROM saved_queries WHERE slug = ?",
         [slug],
