@@ -1,3 +1,4 @@
+from datasette.actor_context import ActorContext
 from datasette.utils.asgi import NotFound, Forbidden, Response
 from datasette.database import QueryInterrupted
 from datasette.events import UpdateRowEvent, DeleteRowEvent
@@ -27,9 +28,10 @@ class RowView(DataView):
         table = resolved.table
         pk_values = resolved.pk_values
 
+        actor_ctx = ActorContext(self.ds, request.actor)
+
         # Ensure user has permission to view this row
-        visible, private = await self.ds.check_visibility(
-            request.actor,
+        visible, private = await actor_ctx.check_visibility(
             action="view-table",
             resource=TableResource(database=database, table=table),
         )
@@ -292,11 +294,12 @@ async def _resolve_row_and_check_permission(datasette, request, permission):
     except RowNotFound as e:
         return False, _error(["Record not found: {}".format(e.pk_values)], 404)
 
+    actor_ctx = ActorContext(datasette, request.actor)
+
     # Ensure user has permission to delete this row
-    if not await datasette.allowed(
+    if not await actor_ctx.allowed(
         action=permission,
         resource=TableResource(database=resolved.db.name, table=resolved.table),
-        actor=request.actor,
     ):
         return False, _error(["Permission denied"], 403)
 
@@ -377,12 +380,13 @@ class RowUpdateView(BaseView):
             return _error(ct_errors, 400)
 
         alter = data.get("alter")
-        if alter and not await self.ds.allowed(
-            action="alter-table",
-            resource=TableResource(database=resolved.db.name, table=resolved.table),
-            actor=request.actor,
-        ):
-            return _error(["Permission denied for alter-table"], 403)
+        if alter:
+            actor_ctx = ActorContext(self.ds, request.actor)
+            if not await actor_ctx.allowed(
+                action="alter-table",
+                resource=TableResource(database=resolved.db.name, table=resolved.table),
+            ):
+                return _error(["Permission denied for alter-table"], 403)
 
         def update_row(conn):
             sqlite_utils.Database(conn)[resolved.table].update(

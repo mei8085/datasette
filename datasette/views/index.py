@@ -1,5 +1,6 @@
 import json
 
+from datasette.actor_context import ActorContext
 from datasette.plugins import pm
 from datasette.utils import (
     add_cors_headers,
@@ -24,19 +25,20 @@ class IndexView(BaseView):
 
     async def get(self, request):
         as_format = request.url_vars["format"]
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
 
         # Get all allowed databases and tables in bulk
-        db_page = await self.ds.allowed_resources(
-            "view-database", request.actor, include_is_private=True
+        db_page = await actor_ctx.allowed_resources(
+            "view-database", include_is_private=True
         )
         allowed_databases = [r async for r in db_page.all()]
         allowed_db_dict = {r.parent: r for r in allowed_databases}
 
         # Group tables by database
         tables_by_db = {}
-        table_page = await self.ds.allowed_resources(
-            "view-table", request.actor, include_is_private=True
+        table_page = await actor_ctx.allowed_resources(
+            "view-table", include_is_private=True
         )
         async for t in table_page.all():
             if t.parent not in tables_by_db:
@@ -177,8 +179,8 @@ class IndexView(BaseView):
                     "databases": databases,
                     "metadata": await self.ds.get_instance_metadata(),
                     "datasette_version": __version__,
-                    "private": not await self.ds.allowed(
-                        action="view-instance", actor=None
+                    "private": not await ActorContext(self.ds, None).allowed(
+                        action="view-instance"
                     ),
                     "top_homepage": make_slot_function(
                         "top_homepage", self.ds, request

@@ -1,5 +1,6 @@
 import json
 import logging
+from datasette.actor_context import ActorContext
 from datasette.events import LogoutEvent, LoginEvent, CreateTokenEvent
 from datasette.resources import DatabaseResource, TableResource
 from datasette.utils.asgi import Response, Forbidden
@@ -47,7 +48,8 @@ class JsonDataView(BaseView):
 
     async def get(self, request):
         if self.permission:
-            await self.ds.ensure_permission(action=self.permission, actor=request.actor)
+            actor_ctx = ActorContext(self.ds, request.actor)
+            await actor_ctx.ensure_permission(action=self.permission)
         if self.needs_request:
             data = self.data_callback(request)
         else:
@@ -78,7 +80,8 @@ class JsonDataView(BaseView):
 
 class PatternPortfolioView(View):
     async def get(self, request, datasette):
-        await datasette.ensure_permission(action="view-instance", actor=request.actor)
+        actor_ctx = ActorContext(datasette, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
         return Response.html(
             await datasette.render_template(
                 "patterns.html",
@@ -136,8 +139,9 @@ class PermissionsDebugView(BaseView):
     has_json_alternate = False
 
     async def get(self, request):
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
-        await self.ds.ensure_permission(action="permissions-debug", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
+        await actor_ctx.ensure_permission(action="permissions-debug")
         filter_ = request.args.get("filter") or "all"
         permission_checks = list(reversed(self.ds._permission_checks))
         if filter_ == "exclude-yours":
@@ -174,8 +178,9 @@ class PermissionsDebugView(BaseView):
         )
 
     async def post(self, request):
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
-        await self.ds.ensure_permission(action="permissions-debug", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
+        await actor_ctx.ensure_permission(action="permissions-debug")
         form = await request.form()
         actor = json.loads(form["actor"])
         permission = form["permission"]
@@ -195,9 +200,11 @@ class AllowedResourcesView(BaseView):
     async def get(self, request):
         await self.ds.refresh_schemas()
 
+        actor_ctx = ActorContext(self.ds, request.actor)
+
         # Check if user has permissions-debug (to show sensitive fields)
-        has_debug_permission = await self.ds.allowed(
-            action="permissions-debug", actor=request.actor
+        has_debug_permission = await actor_ctx.allowed(
+            action="permissions-debug"
         )
 
         # Check if this is a request for JSON (has .json extension)
@@ -358,8 +365,9 @@ class PermissionRulesView(BaseView):
     has_json_alternate = False
 
     async def get(self, request):
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
-        await self.ds.ensure_permission(action="permissions-debug", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
+        await actor_ctx.ensure_permission(action="permissions-debug")
 
         # Check if this is a request for JSON (has .json extension)
         as_format = request.url_vars.get("format")
@@ -503,7 +511,8 @@ async def _check_permission_for_actor(ds, action, parent, child, actor):
         # This shouldn't happen given validation in Action.__post_init__
         return {"error": f"Invalid action configuration: {action}"}, 500
 
-    allowed = await ds.allowed(action=action, resource=resource_obj, actor=actor)
+    actor_ctx = ActorContext(ds, actor)
+    allowed = await actor_ctx.allowed(action=action, resource=resource_obj)
 
     response = {
         "action": action,
@@ -526,7 +535,8 @@ class PermissionCheckView(BaseView):
     has_json_alternate = False
 
     async def get(self, request):
-        await self.ds.ensure_permission(action="permissions-debug", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="permissions-debug")
         as_format = request.url_vars.get("format")
 
         if not as_format:
@@ -576,6 +586,8 @@ class AllowDebugView(BaseView):
         if not errors:
             result = str(actor_matches_allow(actor, allow))
 
+        actor_ctx = ActorContext(self.ds, request.actor)
+
         return await self.render(
             ["allow_debug.html"],
             request,
@@ -584,8 +596,8 @@ class AllowDebugView(BaseView):
                 "error": "\n\n".join(errors) if errors else "",
                 "actor_input": actor_input,
                 "allow_input": allow_input,
-                "has_debug_permission": await self.ds.allowed(
-                    action="permissions-debug", actor=request.actor
+                "has_debug_permission": await actor_ctx.allowed(
+                    action="permissions-debug"
                 ),
             },
         )
@@ -596,11 +608,13 @@ class MessagesDebugView(BaseView):
     has_json_alternate = False
 
     async def get(self, request):
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
         return await self.render(["messages_debug.html"], request)
 
     async def post(self, request):
-        await self.ds.ensure_permission(action="view-instance", actor=request.actor)
+        actor_ctx = ActorContext(self.ds, request.actor)
+        await actor_ctx.ensure_permission(action="view-instance")
         form = await request.form()
         message = form.get("message", "")
         message_type = form.get("message_type") or "INFO"
@@ -752,10 +766,10 @@ class ApiExplorerView(BaseView):
     has_json_alternate = False
 
     async def example_links(self, request):
+        actor_ctx = ActorContext(self.ds, request.actor)
         databases = []
         for name, db in self.ds.databases.items():
-            database_visible, _ = await self.ds.check_visibility(
-                request.actor,
+            database_visible, _ = await actor_ctx.check_visibility(
                 action="view-database",
                 resource=DatabaseResource(database=name),
             )
@@ -764,8 +778,7 @@ class ApiExplorerView(BaseView):
             tables = []
             table_names = await db.table_names()
             for table in table_names:
-                visible, _ = await self.ds.check_visibility(
-                    request.actor,
+                visible, _ = await actor_ctx.check_visibility(
                     action="view-table",
                     resource=TableResource(database=name, table=table),
                 )
@@ -784,10 +797,9 @@ class ApiExplorerView(BaseView):
                 if not db.is_mutable:
                     continue
 
-                if await self.ds.allowed(
+                if await actor_ctx.allowed(
                     action="insert-row",
                     resource=TableResource(database=name, table=table),
-                    actor=request.actor,
                 ):
                     pks = await db.primary_keys(table)
                     table_links.extend(
@@ -831,10 +843,9 @@ class ApiExplorerView(BaseView):
                             },
                         ]
                     )
-                if await self.ds.allowed(
+                if await actor_ctx.allowed(
                     action="drop-table",
                     resource=TableResource(database=name, table=table),
-                    actor=request.actor,
                 ):
                     table_links.append(
                         {
@@ -846,10 +857,9 @@ class ApiExplorerView(BaseView):
                     )
             database_links = []
             if (
-                await self.ds.allowed(
+                await actor_ctx.allowed(
                     action="create-table",
                     resource=DatabaseResource(database=name),
-                    actor=request.actor,
                 )
                 and db.is_mutable
             ):
@@ -881,8 +891,8 @@ class ApiExplorerView(BaseView):
         return databases
 
     async def get(self, request):
-        visible, private = await self.ds.check_visibility(
-            request.actor,
+        actor_ctx = ActorContext(self.ds, request.actor)
+        visible, private = await actor_ctx.check_visibility(
             action="view-instance",
         )
         if not visible:
@@ -1091,11 +1101,12 @@ class DatabaseSchemaView(SchemaBaseView):
         if database_name not in self.ds.databases:
             return self.format_error_response("Database not found", format_)
 
+        actor_ctx = ActorContext(self.ds, request.actor)
+
         # Check view-database permission
-        await self.ds.ensure_permission(
+        await actor_ctx.ensure_permission(
             action="view-database",
             resource=DatabaseResource(database=database_name),
-            actor=request.actor,
         )
 
         schema = await self.get_database_schema(database_name)
@@ -1124,11 +1135,12 @@ class TableSchemaView(SchemaBaseView):
         table_name = request.url_vars["table"]
         format_ = request.url_vars.get("format") or "html"
 
+        actor_ctx = ActorContext(self.ds, request.actor)
+
         # Check view-table permission
-        await self.ds.ensure_permission(
+        await actor_ctx.ensure_permission(
             action="view-table",
             resource=TableResource(database=database_name, table=table_name),
-            actor=request.actor,
         )
 
         # Get schema for the table
