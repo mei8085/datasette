@@ -148,6 +148,56 @@
     </svg>
     <span>Column actions</span>
 </button>
+{% if column_stats %}
+<div class="column-stats-sidebar">
+    <h3>Column Statistics</h3>
+    <table class="column-stats-table">
+        <thead>
+            <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>Null Rate</th>
+                <th>Distinct</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for stat in column_stats %}
+            <tr>
+                <td class="column-name">{{ stat.name }}</td>
+                <td class="column-type">
+                    {% if stat.type %}
+                        <code>{{ stat.type }}</code>
+                    {% else %}
+                        <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td class="column-null-rate">
+                    {% if stat.null_rate is not none %}
+                        {{ stat.null_rate }}%
+                        {% if stat.null_count %}
+                            <span class="muted">({{ stat.null_count }})</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td class="column-distinct">
+                    {% if stat.distinct_count is not none %}
+                        {% if stat.facet_toggle_url %}
+                            <a href="{{ stat.facet_toggle_url }}" title="Click to facet by this column">{{ stat.distinct_count }}</a>
+                        {% else %}
+                            {{ stat.distinct_count }}
+                        {% endif %}
+                    {% else %}
+                        <span class="muted">-</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 <script>
 window._columnChooserData = {{ {"allColumns": all_columns, "selectedColumns": display_columns|map(attribute='name')|list, "primaryKeys": primary_keys}|tojson }};
 </script>

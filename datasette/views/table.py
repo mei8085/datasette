@@ -1559,6 +1559,64 @@ async def table_view_data(
                 suggested_facets.extend(suggest_result)
         return suggested_facets
 
+    async def extra_column_stats(extra_count, extra_columns):
+        "Statistics for each column: type, null rate, distinct count"
+        column_stats = []
+        if extra_count is None or not extra_columns:
+            return column_stats
+
+        column_details = {
+            col.name: col for col in await db.table_column_details(table_name)
+        }
+
+        for column in extra_columns:
+            if column == "rowid" and "rowid" not in column_details:
+                col_type = "integer"
+            else:
+                col_detail = column_details.get(column)
+                col_type = col_detail.type if col_detail else None
+
+            null_count_sql = f"select count(*) from (select * {from_sql} where {escape_sqlite(column)} is null)"
+            distinct_sql = f"select count(distinct {escape_sqlite(column)}) from (select * {from_sql} where {escape_sqlite(column)} is not null)"
+
+            try:
+                null_count_result = await db.execute(null_count_sql, from_sql_params)
+                null_count = null_count_result.single_value()
+            except Exception:
+                null_count = None
+
+            try:
+                distinct_result = await db.execute(distinct_sql, from_sql_params)
+                distinct_count = distinct_result.single_value()
+            except Exception:
+                distinct_count = None
+
+            null_rate = None
+            if null_count is not None and extra_count > 0:
+                null_rate = round(null_count / extra_count * 100, 1)
+
+            facet_toggle_url = None
+            if datasette.setting("allow_facet"):
+                facet_toggle_url = datasette.absolute_url(
+                    request,
+                    datasette.urls.path(
+                        path_with_added_args(request, {"_facet": column})
+                    ),
+                )
+
+            column_stats.append(
+                {
+                    "name": column,
+                    "type": col_type,
+                    "null_count": null_count,
+                    "null_rate": null_rate,
+                    "distinct_count": distinct_count,
+                    "facet_toggle_url": facet_toggle_url,
+                }
+            )
+
+        return column_stats
+
     # Faceting
     if not datasette.setting("allow_facet") and any(
         arg.startswith("_facet") for arg in request.args
@@ -1952,6 +2010,7 @@ async def table_view_data(
             "expandable_columns",
             "form_hidden_args",
             "set_column_type_ui",
+            "column_stats",
         ]
     }
 
@@ -1997,6 +2056,7 @@ async def table_view_data(
         extra_private,
         extra_expandable_columns,
         extra_form_hidden_args,
+        extra_column_stats,
     )
 
     results = await registry.resolve_multi(
