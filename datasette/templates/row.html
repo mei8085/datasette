@@ -211,46 +211,110 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             try {
-                const response = await fetch('{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/history-diff?history_id=' + historyId);
+                const response = await fetch('/{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/history-diff?history_id=' + historyId);
                 const data = await response.json();
                 
                 if (data.ok) {
-                    let html = '<h4>Changes:</h4>';
+                    container.innerHTML = '';
+                    const title = document.createElement('h4');
+                    title.textContent = 'Changes:';
+                    container.appendChild(title);
                     
                     if (Object.keys(data.diff.changed).length > 0) {
-                        html += '<h5>Changed:</h5>';
-                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Old Value</th><th>New Value</th></tr></thead><tbody>';
+                        const changedTitle = document.createElement('h5');
+                        changedTitle.textContent = 'Changed:';
+                        container.appendChild(changedTitle);
+                        
+                        const table = document.createElement('table');
+                        table.className = 'diff-table';
+                        table.innerHTML = '<thead><tr><th>Column</th><th>Old Value</th><th>New Value</th></tr></thead><tbody></tbody>';
+                        
+                        const tbody = table.querySelector('tbody');
                         for (const [col, vals] of Object.entries(data.diff.changed)) {
-                            html += `<tr class="diff-changed"><td>${col}</td><td>${vals.old}</td><td>${vals.new}</td></tr>`;
+                            const tr = document.createElement('tr');
+                            tr.className = 'diff-changed';
+                            
+                            const tdCol = document.createElement('td');
+                            tdCol.textContent = col;
+                            tr.appendChild(tdCol);
+                            
+                            const tdOld = document.createElement('td');
+                            tdOld.textContent = vals.old;
+                            tr.appendChild(tdOld);
+                            
+                            const tdNew = document.createElement('td');
+                            tdNew.textContent = vals.new;
+                            tr.appendChild(tdNew);
+                            
+                            tbody.appendChild(tr);
                         }
-                        html += '</tbody></table>';
+                        container.appendChild(table);
                     }
                     
                     if (Object.keys(data.diff.added).length > 0) {
-                        html += '<h5>Added:</h5>';
-                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Value</th></tr></thead><tbody>';
+                        const addedTitle = document.createElement('h5');
+                        addedTitle.textContent = 'Added:';
+                        container.appendChild(addedTitle);
+                        
+                        const table = document.createElement('table');
+                        table.className = 'diff-table';
+                        table.innerHTML = '<thead><tr><th>Column</th><th>Value</th></tr></thead><tbody></tbody>';
+                        
+                        const tbody = table.querySelector('tbody');
                         for (const [col, val] of Object.entries(data.diff.added)) {
-                            html += `<tr class="diff-added"><td>${col}</td><td>${val}</td></tr>`;
+                            const tr = document.createElement('tr');
+                            tr.className = 'diff-added';
+                            
+                            const tdCol = document.createElement('td');
+                            tdCol.textContent = col;
+                            tr.appendChild(tdCol);
+                            
+                            const tdVal = document.createElement('td');
+                            tdVal.textContent = val;
+                            tr.appendChild(tdVal);
+                            
+                            tbody.appendChild(tr);
                         }
-                        html += '</tbody></table>';
+                        container.appendChild(table);
                     }
                     
                     if (Object.keys(data.diff.removed).length > 0) {
-                        html += '<h5>Removed:</h5>';
-                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Value</th></tr></thead><tbody>';
+                        const removedTitle = document.createElement('h5');
+                        removedTitle.textContent = 'Removed:';
+                        container.appendChild(removedTitle);
+                        
+                        const table = document.createElement('table');
+                        table.className = 'diff-table';
+                        table.innerHTML = '<thead><tr><th>Column</th><th>Value</th></tr></thead><tbody></tbody>';
+                        
+                        const tbody = table.querySelector('tbody');
                         for (const [col, val] of Object.entries(data.diff.removed)) {
-                            html += `<tr class="diff-removed"><td>${col}</td><td>${val}</td></tr>`;
+                            const tr = document.createElement('tr');
+                            tr.className = 'diff-removed';
+                            
+                            const tdCol = document.createElement('td');
+                            tdCol.textContent = col;
+                            tr.appendChild(tdCol);
+                            
+                            const tdVal = document.createElement('td');
+                            tdVal.textContent = val;
+                            tr.appendChild(tdVal);
+                            
+                            tbody.appendChild(tr);
                         }
-                        html += '</tbody></table>';
+                        container.appendChild(table);
                     }
                     
                     if (Object.keys(data.diff.changed).length === 0 && 
                         Object.keys(data.diff.added).length === 0 && 
                         Object.keys(data.diff.removed).length === 0) {
-                        html += '<p><em>No changes detected (same as comparison version)</em></p>';
+                        const p = document.createElement('p');
+                        const em = document.createElement('em');
+                        em.textContent = 'No changes detected (same as comparison version)';
+                        p.appendChild(em);
+                        container.appendChild(p);
                     }
                     
-                    container.innerHTML = html;
                     container.style.display = 'block';
                     historyData.style.display = 'none';
                 }
@@ -273,7 +337,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             try {
-                const response = await fetch('{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/revert', {
+                const response = await fetch('/{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/revert', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
