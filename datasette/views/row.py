@@ -9,6 +9,7 @@ from datasette.utils import (
     make_slot_function,
     to_css_class,
     escape_sqlite,
+    path_from_row_pks,
 )
 from datasette.plugins import pm
 from datetime import datetime, timezone
@@ -210,6 +211,7 @@ class RowView(DataView):
             history = await get_row_history(
                 self.ds, database, table, pk_values
             )
+            pk_path = path_from_row_pks(rows[0], resolved.pks, False)
             return {
                 "private": private,
                 "columns": reordered_columns,
@@ -237,6 +239,7 @@ class RowView(DataView):
                 "row_dict": row_dict,
                 "row_history": history,
                 "current_row": row_dict,
+                "pk_path": pk_path,
             }
 
         data = {

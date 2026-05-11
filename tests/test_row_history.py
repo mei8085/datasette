@@ -314,3 +314,93 @@ async def test_revert_missing_history_id(ds_write):
         headers=_headers(write_token(ds_write)),
     )
     assert revert_response.status_code == 400
+
+
+@pytest.fixture
+def ds_write_special_pk(tmp_path_factory):
+    db_directory = tmp_path_factory.mktemp("dbs")
+    db_path = str(db_directory / "data.db")
+    db1 = sqlite3.connect(str(db_path))
+    db1.execute(
+        "create table special_docs (id text primary key, title text, score float)"
+    )
+    db1.close()
+    ds = Datasette([db_path])
+    ds.root_enabled = True
+    yield ds
+    ds.close()
+
+
+@pytest.mark.asyncio
+async def test_history_and_revert_with_special_characters_in_pk(ds_write_special_pk):
+    from datasette.utils import tilde_encode
+
+    special_pk = "test,value/with/special@chars"
+    encoded_pk = tilde_encode(special_pk)
+
+    insert_response = await ds_write_special_pk.client.post(
+        "/data/special_docs/-/insert",
+        json={
+            "row": {
+                "id": special_pk,
+                "title": "Original title",
+                "score": 1.0,
+            },
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_special_pk)),
+    )
+    assert insert_response.status_code == 201
+
+    update_response = await ds_write_special_pk.client.post(
+        "/data/special_docs/{}/-/update".format(encoded_pk),
+        json={
+            "update": {
+                "title": "Updated title",
+                "score": 2.0,
+            },
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_special_pk)),
+    )
+    assert update_response.status_code == 200
+
+    history_response = await ds_write_special_pk.client.get(
+        "/data/special_docs/{}/-/history".format(encoded_pk),
+        headers=_headers(write_token(ds_write_special_pk, permissions=["vi", "vt"])),
+    )
+    assert history_response.status_code == 200
+    history_data = history_response.json()
+    assert history_data["ok"] is True
+    assert len(history_data["history"]) == 1
+    assert history_data["history"][0]["row_data"]["title"] == "Original title"
+    assert history_data["history"][0]["row_data"]["score"] == 1.0
+
+    history_id = history_data["history"][0]["id"]
+    diff_response = await ds_write_special_pk.client.get(
+        "/data/special_docs/{}/-/history-diff?history_id={}".format(
+            encoded_pk, history_id
+        ),
+        headers=_headers(write_token(ds_write_special_pk, permissions=["vi", "vt"])),
+    )
+    assert diff_response.status_code == 200
+    diff_data = diff_response.json()
+    assert diff_data["ok"] is True
+    assert "changed" in diff_data["diff"]
+    assert "title" in diff_data["diff"]["changed"]
+    assert diff_data["diff"]["changed"]["title"]["old"] == "Original title"
+    assert diff_data["diff"]["changed"]["title"]["new"] == "Updated title"
+
+    revert_response = await ds_write_special_pk.client.post(
+        "/data/special_docs/{}/-/revert".format(encoded_pk),
+        json={
+            "history_id": history_id,
+            "return": True,
+        },
+        headers=_headers(write_token(ds_write_special_pk)),
+    )
+    assert revert_response.status_code == 200
+    revert_data = revert_response.json()
+    assert revert_data["ok"] is True
+    assert revert_data["row"]["title"] == "Original title"
+    assert revert_data["row"]["score"] == 1.0
