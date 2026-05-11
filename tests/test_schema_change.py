@@ -1,8 +1,11 @@
 import asyncio
+import io
 import json
 import os
 import pytest
+import sys
 import tempfile
+from unittest import mock
 from datasette.app import Datasette
 from datasette.events import SchemaChangeEvent
 from datasette.utils.sqlite import sqlite3
@@ -79,10 +82,85 @@ async def test_schema_change_check_interval_disabled(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_schema_change_event_triggered(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+
+    ds._tracked_events = []
+
+    conn = sqlite3.connect(tmp_db)
+    conn.execute("ALTER TABLE test ADD COLUMN age INTEGER")
+    conn.commit()
+    conn.close()
+
+    await ds._refresh_schemas()
+
+    schema_change_events = [
+        e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
+    ]
+    assert len(schema_change_events) == 1
+    event = schema_change_events[0]
+    assert event.name == "schema-change"
+    assert event.database == "test"
+    assert event.before_schema_version < event.after_schema_version
+
+
+@pytest.mark.asyncio
+async def test_schema_change_event_not_triggered_on_first_refresh(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    ds._tracked_events = []
+
+    await ds._refresh_schemas()
+
+    schema_change_events = [
+        e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
+    ]
+    assert len(schema_change_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_change_event_not_triggered_when_no_change(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+    ds._tracked_events = []
+
+    await ds._refresh_schemas()
+
+    schema_change_events = [
+        e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
+    ]
+    assert len(schema_change_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_change_log_output(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+
+    stderr_buffer = io.StringIO()
+    with mock.patch('sys.stderr', stderr_buffer):
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("ALTER TABLE test ADD COLUMN age INTEGER")
+        conn.commit()
+        conn.close()
+
+        await ds._refresh_schemas()
+
+    stderr_output = stderr_buffer.getvalue()
+    assert "Schema change detected for database test" in stderr_output
+    assert "version" in stderr_output
+    assert "->" in stderr_output
+
+
+@pytest.mark.asyncio
 async def test_internal_schema_version_update(tmp_db):
     ds = Datasette([tmp_db])
     await ds.invoke_startup()
-    await ds.refresh_schemas()
+    await ds._refresh_schemas()
 
     internal_db = ds.get_internal_database()
     results = await internal_db.execute(
@@ -95,7 +173,7 @@ async def test_internal_schema_version_update(tmp_db):
     conn.commit()
     conn.close()
 
-    await ds.refresh_schemas()
+    await ds._refresh_schemas()
 
     results = await internal_db.execute(
         "SELECT schema_version FROM catalog_databases WHERE database_name = 'test'"
@@ -103,6 +181,33 @@ async def test_internal_schema_version_update(tmp_db):
     after_version = results.rows[0]["schema_version"]
 
     assert before_version < after_version
+
+
+@pytest.mark.asyncio
+async def test_schema_tables_populated_after_change(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+
+    internal_db = ds.get_internal_database()
+    results = await internal_db.execute(
+        "SELECT COUNT(*) as count FROM columns WHERE database_name = 'test' AND table_name = 'test'"
+    )
+    before_count = results.rows[0]["count"]
+    assert before_count == 2
+
+    conn = sqlite3.connect(tmp_db)
+    conn.execute("ALTER TABLE test ADD COLUMN age INTEGER")
+    conn.commit()
+    conn.close()
+
+    await ds._refresh_schemas()
+
+    results = await internal_db.execute(
+        "SELECT COUNT(*) as count FROM columns WHERE database_name = 'test' AND table_name = 'test'"
+    )
+    after_count = results.rows[0]["count"]
+    assert after_count == 3
 
 
 @pytest.mark.asyncio
@@ -139,10 +244,6 @@ async def test_asgi_lifespan_starts_schema_check(tmp_db):
 
 @pytest.mark.asyncio
 async def test_schema_change_event_properties(tmp_db):
-    ds = Datasette([tmp_db])
-    await ds.invoke_startup()
-    await ds.refresh_schemas()
-
     event = SchemaChangeEvent(
         actor=None,
         database="test",
@@ -159,55 +260,6 @@ async def test_schema_change_event_properties(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_schema_change_detected_via_internal_db(tmp_db):
-    ds = Datasette([tmp_db])
-    await ds.invoke_startup()
-    await ds.refresh_schemas()
-
-    internal_db = ds.get_internal_database()
-    results = await internal_db.execute(
-        "SELECT schema_version FROM catalog_databases WHERE database_name = 'test'"
-    )
-    before_version = results.rows[0]["schema_version"]
-
-    conn = sqlite3.connect(tmp_db)
-    conn.execute("ALTER TABLE test ADD COLUMN age INTEGER")
-    conn.commit()
-    conn.close()
-
-    await ds.refresh_schemas()
-
-    results = await internal_db.execute(
-        "SELECT schema_version FROM catalog_databases WHERE database_name = 'test'"
-    )
-    after_version = results.rows[0]["schema_version"]
-
-    assert before_version < after_version
-
-
-@pytest.mark.asyncio
-async def test_schema_change_no_change_when_no_alteration(tmp_db):
-    ds = Datasette([tmp_db])
-    await ds.invoke_startup()
-    await ds.refresh_schemas()
-
-    internal_db = ds.get_internal_database()
-    results = await internal_db.execute(
-        "SELECT schema_version FROM catalog_databases WHERE database_name = 'test'"
-    )
-    before_version = results.rows[0]["schema_version"]
-
-    await ds.refresh_schemas()
-
-    results = await internal_db.execute(
-        "SELECT schema_version FROM catalog_databases WHERE database_name = 'test'"
-    )
-    after_version = results.rows[0]["schema_version"]
-
-    assert before_version == after_version
-
-
-@pytest.mark.asyncio
 async def test_schema_change_webhook_payload_structure():
     payload = {
         "event": "schema-change",
@@ -220,3 +272,50 @@ async def test_schema_change_webhook_payload_structure():
     assert payload["database"] == "test"
     assert payload["before_schema_version"] == 1
     assert payload["after_schema_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_multiple_schema_changes(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+
+    ds._tracked_events = []
+
+    conn = sqlite3.connect(tmp_db)
+    conn.execute("ALTER TABLE test ADD COLUMN age INTEGER")
+    conn.commit()
+    await ds._refresh_schemas()
+
+    conn.execute("ALTER TABLE test ADD COLUMN email TEXT")
+    conn.commit()
+    conn.close()
+    await ds._refresh_schemas()
+
+    schema_change_events = [
+        e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
+    ]
+    assert len(schema_change_events) == 2
+    assert schema_change_events[0].before_schema_version < schema_change_events[0].after_schema_version
+    assert schema_change_events[1].before_schema_version < schema_change_events[1].after_schema_version
+
+
+@pytest.mark.asyncio
+async def test_no_schema_change_events_on_insert_or_update(tmp_db):
+    ds = Datasette([tmp_db])
+    await ds.invoke_startup()
+    await ds._refresh_schemas()
+
+    ds._tracked_events = []
+
+    conn = sqlite3.connect(tmp_db)
+    conn.execute("INSERT INTO test (name) VALUES ('another')")
+    conn.commit()
+    conn.close()
+
+    await ds._refresh_schemas()
+
+    schema_change_events = [
+        e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
+    ]
+    assert len(schema_change_events) == 0
