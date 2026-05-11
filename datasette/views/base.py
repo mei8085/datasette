@@ -1,7 +1,4 @@
 import asyncio
-import csv
-import hashlib
-import sys
 import textwrap
 import time
 import urllib
@@ -9,22 +6,18 @@ from markupsafe import escape
 
 
 from datasette.database import QueryInterrupted
-from datasette.utils.asgi import Request
+from datasette.result_formatter import stream_csv, render_response, get_available_renderers
 from datasette.utils import (
     add_cors_headers,
     await_me_maybe,
-    EscapeHtmlWriter,
     InvalidSql,
-    LimitedWriter,
     call_with_supported_arguments,
-    path_from_row_pks,
     path_with_added_args,
     path_with_removed_args,
     path_with_format,
     sqlite3,
 )
 from datasette.utils.asgi import (
-    AsgiStream,
     NotFound,
     Response,
     BadRequest,
@@ -214,11 +207,7 @@ class DataView(BaseView):
         _format = request.url_vars["format"]
         data_kwargs = {}
 
-        if _format == "csv":
-            return await self.as_csv(request, database_route)
-
         if _format is None:
-            # HTML views default to expanding all foreign key labels
             data_kwargs["default_labels"] = True
 
         extra_template_data = {}
@@ -229,7 +218,6 @@ class DataView(BaseView):
             response_or_template_contexts = await self.data(request, **data_kwargs)
             if isinstance(response_or_template_contexts, Response):
                 return response_or_template_contexts
-            # If it has four items, it includes an HTTP status code
             if len(response_or_template_contexts) == 4:
                 (
                     data,
@@ -267,7 +255,6 @@ class DataView(BaseView):
         end = time.perf_counter()
         data["query_ms"] = (end - start) * 1000
 
-        # Special case for .jsono extension - redirect to _shape=objects
         if _format == "jsono":
             return self.redirect(
                 request,
@@ -279,44 +266,25 @@ class DataView(BaseView):
                 forward_querystring=False,
             )
 
-        if _format in self.ds.renderers.keys():
-            # Dispatch request to the correct output format renderer
-            # (CSV is not handled here due to streaming)
-            result = call_with_supported_arguments(
-                self.ds.renderers[_format][0],
-                datasette=self.ds,
-                columns=data.get("columns") or [],
-                rows=data.get("rows") or [],
-                sql=data.get("query", {}).get("sql", None),
-                query_name=data.get("query_name"),
-                database=database,
-                table=data.get("table"),
-                request=request,
-                view_name=self.name,
-                truncated=False,  # TODO: support this
+        if _format == "csv":
+            r = await self.as_csv(request, database_route)
+        elif _format in self.ds.renderers.keys():
+            r = await render_response(
+                self.ds,
+                request,
+                _format,
+                data,
+                data.get("columns") or [],
+                data.get("rows") or [],
+                data.get("query", {}).get("sql", None),
+                data.get("query_name"),
+                database,
+                data.get("table"),
+                self.name,
+                status_code=status_code,
                 error=data.get("error"),
-                # These will be deprecated in Datasette 1.0:
-                args=request.args,
-                data=data,
+                truncated=False,
             )
-            if asyncio.iscoroutine(result):
-                result = await result
-            if result is None:
-                raise NotFound("No data")
-            if isinstance(result, dict):
-                r = Response(
-                    body=result.get("body"),
-                    status=result.get("status_code", status_code or 200),
-                    content_type=result.get("content_type", "text/plain"),
-                    headers=result.get("headers"),
-                )
-            elif isinstance(result, Response):
-                r = result
-                if status_code is not None:
-                    # Over-ride the status code
-                    r.status = status_code
-            else:
-                assert False, f"{result} should be dict or Response"
         else:
             extras = {}
             if callable(extra_template_data):
@@ -325,32 +293,23 @@ class DataView(BaseView):
                     extras = await extras
             else:
                 extras = extra_template_data
+
+            renderers = await get_available_renderers(
+                self.ds,
+                request,
+                data,
+                data.get("columns") or [],
+                data.get("rows") or [],
+                data.get("query", {}).get("sql", None),
+                data.get("query_name"),
+                database,
+                data.get("table"),
+                self.name,
+            )
+
             url_labels_extra = {}
             if data.get("expandable_columns"):
                 url_labels_extra = {"_labels": "on"}
-
-            renderers = {}
-            for key, (_, can_render) in self.ds.renderers.items():
-                it_can_render = call_with_supported_arguments(
-                    can_render,
-                    datasette=self.ds,
-                    columns=data.get("columns") or [],
-                    rows=data.get("rows") or [],
-                    sql=data.get("query", {}).get("sql", None),
-                    query_name=data.get("query_name"),
-                    database=database,
-                    table=data.get("table"),
-                    request=request,
-                    view_name=self.name,
-                )
-                it_can_render = await await_me_maybe(it_can_render)
-                if it_can_render:
-                    renderers[key] = self.ds.urls.path(
-                        path_with_format(
-                            request=request, format=key, extra_qs={**url_labels_extra}
-                        )
-                    )
-
             url_csv_args = {"_size": "max", **url_labels_extra}
             url_csv = self.ds.urls.path(
                 path_with_format(request=request, format="csv", extra_qs=url_csv_args)
@@ -401,170 +360,3 @@ class DataView(BaseView):
 
 def _error(messages, status=400):
     return Response.json({"ok": False, "errors": messages}, status=status)
-
-
-async def stream_csv(datasette, fetch_data, request, database):
-    kwargs = {}
-    stream = request.args.get("_stream")
-    # Do not calculate facets or counts:
-    extra_parameters = [
-        "{}=1".format(key)
-        for key in ("_nofacet", "_nocount")
-        if not request.args.get(key)
-    ]
-    if extra_parameters:
-        # Replace request object with a new one with modified scope
-        if not request.query_string:
-            new_query_string = "&".join(extra_parameters)
-        else:
-            new_query_string = request.query_string + "&" + "&".join(extra_parameters)
-        new_scope = dict(request.scope, query_string=new_query_string.encode("latin-1"))
-        receive = request.receive
-        request = Request(new_scope, receive)
-    if stream:
-        # Some quick soundness checks
-        if not datasette.setting("allow_csv_stream"):
-            raise BadRequest("CSV streaming is disabled")
-        if request.args.get("_next"):
-            raise BadRequest("_next not allowed for CSV streaming")
-        kwargs["_size"] = "max"
-    # Fetch the first page
-    try:
-        response_or_template_contexts = await fetch_data(request)
-        if isinstance(response_or_template_contexts, Response):
-            return response_or_template_contexts
-        elif len(response_or_template_contexts) == 4:
-            data, _, _, _ = response_or_template_contexts
-        else:
-            data, _, _ = response_or_template_contexts
-    except (sqlite3.OperationalError, InvalidSql) as e:
-        raise DatasetteError(str(e), title="Invalid SQL", status=400)
-
-    except sqlite3.OperationalError as e:
-        raise DatasetteError(str(e))
-
-    except DatasetteError:
-        raise
-
-    # Convert rows and columns to CSV
-    headings = data["columns"]
-    # if there are expanded_columns we need to add additional headings
-    expanded_columns = set(data.get("expanded_columns") or [])
-    if expanded_columns:
-        headings = []
-        for column in data["columns"]:
-            headings.append(column)
-            if column in expanded_columns:
-                headings.append(f"{column}_label")
-
-    content_type = "text/plain; charset=utf-8"
-    preamble = ""
-    postamble = ""
-
-    trace = request.args.get("_trace")
-    if trace:
-        content_type = "text/html; charset=utf-8"
-        preamble = (
-            "<html><head><title>CSV debug</title></head>"
-            '<body><textarea style="width: 90%; height: 70vh">'
-        )
-        postamble = "</textarea></body></html>"
-
-    async def stream_fn(r):
-        nonlocal data, trace
-        limited_writer = LimitedWriter(r, datasette.setting("max_csv_mb"))
-        if trace:
-            await limited_writer.write(preamble)
-            writer = csv.writer(EscapeHtmlWriter(limited_writer))
-        else:
-            writer = csv.writer(limited_writer)
-        first = True
-        next = None
-        while first or (next and stream):
-            try:
-                kwargs = {}
-                if next:
-                    kwargs["_next"] = next
-                if not first:
-                    data, _, _ = await fetch_data(request, **kwargs)
-                if first:
-                    if request.args.get("_header") != "off":
-                        await writer.writerow(headings)
-                    first = False
-                next = data.get("next")
-                for row in data["rows"]:
-                    if any(isinstance(r, bytes) for r in row):
-                        new_row = []
-                        for column, cell in zip(headings, row):
-                            if isinstance(cell, bytes):
-                                # If this is a table page, use .urls.row_blob()
-                                if data.get("table"):
-                                    pks = data.get("primary_keys") or []
-                                    cell = datasette.absolute_url(
-                                        request,
-                                        datasette.urls.row_blob(
-                                            database,
-                                            data["table"],
-                                            path_from_row_pks(row, pks, not pks),
-                                            column,
-                                        ),
-                                    )
-                                else:
-                                    # Otherwise generate URL for this query
-                                    url = datasette.absolute_url(
-                                        request,
-                                        path_with_format(
-                                            request=request,
-                                            format="blob",
-                                            extra_qs={
-                                                "_blob_column": column,
-                                                "_blob_hash": hashlib.sha256(
-                                                    cell
-                                                ).hexdigest(),
-                                            },
-                                            replace_format="csv",
-                                        ),
-                                    )
-                                    cell = url.replace("&_nocount=1", "").replace(
-                                        "&_nofacet=1", ""
-                                    )
-                            new_row.append(cell)
-                        row = new_row
-                    if not expanded_columns:
-                        # Simple path
-                        await writer.writerow(row)
-                    else:
-                        # Look for {"value": "label": } dicts and expand
-                        new_row = []
-                        for heading, cell in zip(data["columns"], row):
-                            if heading in expanded_columns:
-                                if cell is None:
-                                    new_row.extend(("", ""))
-                                else:
-                                    if not isinstance(cell, dict):
-                                        new_row.extend((cell, ""))
-                                    else:
-                                        new_row.append(cell["value"])
-                                        new_row.append(cell["label"])
-                            else:
-                                new_row.append(cell)
-                        await writer.writerow(new_row)
-            except Exception as ex:
-                sys.stderr.write("Caught this error: {}\n".format(ex))
-                sys.stderr.flush()
-                await r.write(str(ex))
-                return
-        await limited_writer.write(postamble)
-
-    headers = {}
-    if datasette.cors:
-        add_cors_headers(headers)
-    if request.args.get("_dl", None):
-        if not trace:
-            content_type = "text/csv; charset=utf-8"
-        disposition = 'attachment; filename="{}.csv"'.format(
-            request.url_vars.get("table", database)
-        )
-        headers["content-disposition"] = disposition
-
-    return AsgiStream(stream_fn, headers=headers, content_type=content_type)

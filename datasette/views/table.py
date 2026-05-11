@@ -44,7 +44,8 @@ from datasette.utils import (
 from datasette.utils.asgi import BadRequest, Forbidden, NotFound, Response
 from datasette.filters import Filters
 import sqlite_utils
-from .base import BaseView, DatasetteError, _error, stream_csv
+from datasette.result_formatter import stream_csv, render_response
+from .base import BaseView, DatasetteError, _error
 from .database import QueryView
 
 LINK_WITH_LABEL = (
@@ -997,9 +998,7 @@ async def table_view_traced(datasette, request):
         return view_data
     data, rows, columns, expanded_columns, sql, next_url = view_data
 
-    # Handle formats from plugins
     if format_ == "csv":
-
         async def fetch_data(request, _next=None):
             (
                 data,
@@ -1023,45 +1022,23 @@ async def table_view_traced(datasette, request):
             data["expanded_columns"] = expanded_columns
             return data, None, None
 
-        return await stream_csv(datasette, fetch_data, request, resolved.db.name)
+        r = await stream_csv(datasette, fetch_data, request, resolved.db.name)
     elif format_ in datasette.renderers.keys():
-        # Dispatch request to the correct output format renderer
-        # (CSV is not handled here due to streaming)
-        result = call_with_supported_arguments(
-            datasette.renderers[format_][0],
-            datasette=datasette,
-            columns=columns,
-            rows=rows,
-            sql=sql,
-            query_name=None,
-            database=resolved.db.name,
-            table=resolved.table,
-            request=request,
-            view_name="table",
+        r = await render_response(
+            datasette,
+            request,
+            format_,
+            data,
+            columns,
+            rows,
+            sql,
+            None,
+            resolved.db.name,
+            resolved.table,
+            "table",
             truncated=False,
             error=None,
-            # These will be deprecated in Datasette 1.0:
-            args=request.args,
-            data=data,
         )
-        if asyncio.iscoroutine(result):
-            result = await result
-        if result is None:
-            raise NotFound("No data")
-        if isinstance(result, dict):
-            r = Response(
-                body=result.get("body"),
-                status=result.get("status_code") or 200,
-                content_type=result.get("content_type", "text/plain"),
-                headers=result.get("headers"),
-            )
-        elif isinstance(result, Response):
-            r = result
-            # if status_code is not None:
-            #     # Over-ride the status code
-            #     r.status = status_code
-        else:
-            assert False, f"{result} should be dict or Response"
     elif format_ == "html":
         headers = {}
         templates = [
@@ -1090,7 +1067,6 @@ async def table_view_traced(datasette, request):
                     path_with_replaced_args=path_with_replaced_args,
                     fix_path=datasette.urls.path,
                     settings=datasette.settings_dict(),
-                    # TODO: review up all of these hacks:
                     alternate_url_json=alternate_url_json,
                     datasette_allow_facet=(
                         "true" if datasette.setting("allow_facet") else "false"

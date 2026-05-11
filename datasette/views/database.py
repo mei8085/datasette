@@ -34,7 +34,8 @@ from datasette.utils import (
 from datasette.utils.asgi import AsgiFileDownload, NotFound, Response, Forbidden
 from datasette.plugins import pm
 
-from .base import BaseView, DatasetteError, View, _error, stream_csv
+from datasette.result_formatter import stream_csv, render_response, get_available_renderers
+from .base import BaseView, DatasetteError, View, _error
 from . import Context
 
 
@@ -642,53 +643,29 @@ class QueryView(View):
             except DatasetteError:
                 raise
 
-        # Handle formats from plugins
         if format_ == "csv":
-
             async def fetch_data_for_csv(request, _next=None):
                 results = await db.execute(sql, params, truncate=True)
                 data = {"rows": results.rows, "columns": results.columns}
                 return data, None, None
 
-            return await stream_csv(datasette, fetch_data_for_csv, request, db.name)
+            r = await stream_csv(datasette, fetch_data_for_csv, request, db.name)
         elif format_ in datasette.renderers.keys():
-            # Dispatch request to the correct output format renderer
-            # (CSV is not handled here due to streaming)
-            result = call_with_supported_arguments(
-                datasette.renderers[format_][0],
-                datasette=datasette,
-                columns=columns,
-                rows=rows,
-                sql=sql,
-                query_name=canned_query["name"] if canned_query else None,
-                database=database,
-                table=None,
-                request=request,
-                view_name="table",
-                truncated=results.truncated if results else False,
+            r = await render_response(
+                datasette,
+                request,
+                format_,
+                {"ok": True, "rows": rows, "columns": columns},
+                columns,
+                rows,
+                sql,
+                canned_query["name"] if canned_query else None,
+                database,
+                None,
+                "table",
                 error=query_error,
-                # These will be deprecated in Datasette 1.0:
-                args=request.args,
-                data={"ok": True, "rows": rows, "columns": columns},
+                truncated=results.truncated if results else False,
             )
-            if asyncio.iscoroutine(result):
-                result = await result
-            if result is None:
-                raise NotFound("No data")
-            if isinstance(result, dict):
-                r = Response(
-                    body=result.get("body"),
-                    status=result.get("status_code") or 200,
-                    content_type=result.get("content_type", "text/plain"),
-                    headers=result.get("headers"),
-                )
-            elif isinstance(result, Response):
-                r = result
-                # if status_code is not None:
-                #     # Over-ride the status code
-                #     r.status = status_code
-            else:
-                assert False, f"{result} should be dict or Response"
         elif format_ == "html":
             headers = {}
             templates = [f"query-{to_css_class(database)}.html", "query.html"]
@@ -704,7 +681,6 @@ class QueryView(View):
                 request,
                 datasette.urls.path(path_with_format(request=request, format="json")),
             )
-            data = {}
             headers.update(
                 {
                     "Link": '<{}>; rel="alternate"; type="application/json+datasette"'.format(
@@ -714,25 +690,18 @@ class QueryView(View):
             )
             metadata = await datasette.get_database_metadata(database)
 
-            renderers = {}
-            for key, (_, can_render) in datasette.renderers.items():
-                it_can_render = call_with_supported_arguments(
-                    can_render,
-                    datasette=datasette,
-                    columns=data.get("columns") or [],
-                    rows=data.get("rows") or [],
-                    sql=data.get("query", {}).get("sql", None),
-                    query_name=data.get("query_name"),
-                    database=database,
-                    table=data.get("table"),
-                    request=request,
-                    view_name="database",
-                )
-                it_can_render = await await_me_maybe(it_can_render)
-                if it_can_render:
-                    renderers[key] = datasette.urls.path(
-                        path_with_format(request=request, format=key)
-                    )
+            renderers = await get_available_renderers(
+                datasette,
+                request,
+                {},
+                [],
+                [],
+                sql,
+                canned_query["name"] if canned_query else None,
+                database,
+                None,
+                "database",
+            )
 
             allow_execute_sql = await datasette.allowed(
                 action="execute-sql",
@@ -763,10 +732,6 @@ class QueryView(View):
                     show_hide_text = "hide"
             hide_sql = show_hide_text == "show"
 
-            # Show 'Edit SQL' button only if:
-            # - User is allowed to execute SQL
-            # - SQL is an approved SELECT statement
-            # - No magic parameters, so no :_ in the SQL string
             edit_sql_url = None
             is_validated_sql = False
             try:
