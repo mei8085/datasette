@@ -9,6 +9,7 @@ Permissions are integrated with the existing canned query permission system.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import string
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -21,8 +22,6 @@ from datasette.resources import QueryResource
 
 SHORTLINK_CHARS = string.ascii_lowercase + string.ascii_uppercase + string.digits
 SHORTLINK_LENGTH = 8
-
-import re
 SLUG_PATTERN = re.compile(r"^[^\/\.]+$")
 
 

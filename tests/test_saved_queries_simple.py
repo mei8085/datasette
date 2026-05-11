@@ -195,14 +195,43 @@ async def test_valid_slugs():
 
 
 @pytest.mark.asyncio
-async def test_canned_query_conflict():
-    """Test that saving a query with a name that conflicts with an existing canned query is rejected."""
+async def test_duplicate_saved_query():
+    """Test that saving a query with a name that conflicts with an existing saved query is rejected."""
     ds = Datasette([])
     from datasette.default_permissions import save_query
     
     # First, save a query
-    await save_query(ds, "test_db", "SELECT 1", slug="conflicting_query")
+    await save_query(ds, "test_db", "SELECT 1", slug="duplicate_test")
     
     # Now try to save another query with the same name
-    with pytest.raises(ValueError, match="conflicts"):
-        await save_query(ds, "test_db", "SELECT 2", slug="conflicting_query")
+    with pytest.raises(ValueError, match="already exists"):
+        await save_query(ds, "test_db", "SELECT 2", slug="duplicate_test")
+
+
+@pytest.mark.asyncio
+async def test_canned_query_conflict():
+    """Test that saving a query with a name that conflicts with an existing canned query is rejected."""
+    # Create a Datasette instance with a canned query defined in config
+    ds = Datasette(
+        [],
+        config={
+            "databases": {
+                "test_db": {
+                    "queries": {
+                        "existing_canned": {
+                            "sql": "SELECT 1 as canned",
+                        }
+                    }
+                }
+            }
+        }
+    )
+    from datasette.default_permissions import save_query
+    
+    # Verify the canned query exists
+    canned = await ds.get_canned_queries("test_db", actor=None)
+    assert "existing_canned" in canned, "Canned query should exist"
+    
+    # Now try to save a query with the same name as the existing canned query
+    with pytest.raises(ValueError, match="conflicts with an existing canned query"):
+        await save_query(ds, "test_db", "SELECT 2", slug="existing_canned")
