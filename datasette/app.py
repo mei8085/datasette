@@ -40,7 +40,7 @@ from jinja2 import (
 from jinja2.environment import Template
 from jinja2.exceptions import TemplateNotFound
 
-from .events import Event
+from .events import Event, SchemaChangeEvent
 from .column_types import SQLiteType
 from .views import Context
 from .views.database import database_download, DatabaseView, TableCreateView, QueryView
@@ -614,7 +614,6 @@ class Datasette:
                 "select database_name, schema_version from catalog_databases"
             )
         }
-        # Delete stale entries for databases that are no longer attached
         stale_databases = set(current_schema_versions.keys()) - set(
             self.databases.keys()
         )
@@ -625,7 +624,25 @@ class Datasette:
             )
         for database_name, db in self.databases.items():
             schema_version = (await db.execute("PRAGMA schema_version")).first()[0]
-            # Compare schema versions to see if we should skip it
+            before_version = current_schema_versions.get(database_name)
+            if before_version is not None and schema_version != before_version:
+                event = SchemaChangeEvent(
+                    actor=None,
+                    database=database_name,
+                    before_schema_version=before_version,
+                    after_schema_version=schema_version,
+                )
+                await self.track_event(event)
+                sys.stderr.write(
+                    f"Schema change detected for database {database_name}: "
+                    f"version {before_version} -> {schema_version}\n"
+                )
+                sys.stderr.flush()
+                webhook_urls = self._schema_change_webhook_urls()
+                if webhook_urls:
+                    await self._send_schema_change_webhook(
+                        database_name, before_version, schema_version, webhook_urls
+                    )
             if schema_version == current_schema_versions.get(database_name):
                 continue
             placeholders = "(?, ?, ?, ?)"
@@ -641,6 +658,38 @@ class Datasette:
                 values,
             )
             await populate_schema_tables(internal_db, db)
+
+    def _schema_change_webhook_urls(self):
+        webhook_config = self.config.get("schema_change_webhook", {})
+        if isinstance(webhook_config, str):
+            return [webhook_config]
+        elif isinstance(webhook_config, list):
+            return webhook_config
+        elif isinstance(webhook_config, dict):
+            return webhook_config.get("urls", [])
+        return []
+
+    async def _send_schema_change_webhook(self, database_name, before_version, after_version, urls):
+        payload = {
+            "event": "schema-change",
+            "database": database_name,
+            "before_schema_version": before_version,
+            "after_schema_version": after_version,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        for url in urls:
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        url,
+                        json=payload,
+                        timeout=10.0,
+                    )
+            except Exception as e:
+                sys.stderr.write(
+                    f"Failed to send schema change webhook to {url}: {e}\n"
+                )
+                sys.stderr.flush()
 
     @property
     def urls(self):
@@ -2328,24 +2377,65 @@ class Datasette:
             raise RowNotFound(db.name, table_name, pk_values)
         return ResolvedRow(db, table_name, sql, params, pks, pk_values, results.first())
 
+    def _get_schema_check_interval(self):
+        config = self.config.get("schema_change_check", {})
+        if isinstance(config, dict):
+            return config.get("interval_seconds", 60)
+        return 60
+
     def app(self):
         """Returns an ASGI app function that serves the whole of Datasette"""
         routes = self._routes()
+        schema_check_task = None
+        schema_check_event = asyncio.Event()
+
+        async def schema_check_loop():
+            interval = self._get_schema_check_interval()
+            try:
+                while not schema_check_event.is_set():
+                    try:
+                        await self.refresh_schemas()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                pass
+
+        async def start_schema_check():
+            nonlocal schema_check_task
+            interval = self._get_schema_check_interval()
+            if interval > 0:
+                schema_check_task = asyncio.create_task(schema_check_loop())
+
+        async def stop_schema_check():
+            nonlocal schema_check_task
+            schema_check_event.set()
+            if schema_check_task is not None:
+                schema_check_task.cancel()
+                try:
+                    await schema_check_task
+                except asyncio.CancelledError:
+                    pass
+                schema_check_task = None
 
         async def setup_db():
-            # First time server starts up, calculate table counts for immutable databases
             for database in self.databases.values():
                 if not database.is_mutable:
                     await database.table_counts(limit=60 * 60 * 1000)
 
         async def _close_on_shutdown():
+            await stop_schema_check()
             self.close()
 
         asgi = CrossOriginProtectionMiddleware(DatasetteRouter(self, routes), self)
         if self.setting("trace_debug"):
             asgi = AsgiTracer(asgi)
-        asgi = AsgiLifespan(asgi, on_shutdown=[_close_on_shutdown])
-        asgi = AsgiRunOnFirstRequest(asgi, on_startup=[setup_db, self.invoke_startup])
+        asgi = AsgiLifespan(
+            asgi, on_startup=[start_schema_check], on_shutdown=[_close_on_shutdown]
+        )
+        asgi = AsgiRunOnFirstRequest(
+            asgi, on_startup=[setup_db, self.invoke_startup]
+        )
         for wrapper in pm.hook.asgi_wrapper(datasette=self):
             asgi = wrapper(asgi)
         return asgi

@@ -276,6 +276,27 @@ def write_wrapper(datasette, database, request, transaction):
     return wrapper
 
 
+@dataclass
+class SchemaChangeEvent(Event):
+    """
+    Event name: ``schema-change``
+
+    A database schema has changed externally.
+
+    :ivar database: The name of the database that changed.
+    :type database: str
+    :ivar before_schema_version: The schema version before the change.
+    :type before_schema_version: int
+    :ivar after_schema_version: The schema version after the change.
+    :type after_schema_version: int
+    """
+
+    name = "schema-change"
+    database: str
+    before_schema_version: int
+    after_schema_version: int
+
+
 @hookimpl
 def register_events():
     return [
@@ -290,4 +311,5 @@ def register_events():
         UpsertRowsEvent,
         UpdateRowEvent,
         DeleteRowEvent,
+        SchemaChangeEvent,
     ]
