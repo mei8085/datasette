@@ -1401,3 +1401,176 @@ def test_foreign_keys_special_character_in_database_name(app_client_with_dot):
     # https://github.com/simonw/datasette/pull/2476
     response = app_client_with_dot.get("/fixtures~2Edot/complex_foreign_keys")
     assert '<a href="/fixtures~2Edot/simple_primary_key/2">world</a>' in response.text
+
+
+@pytest.mark.asyncio
+async def test_column_stats_sidebar_exists(ds_client):
+    response = await ds_client.get("/fixtures/facetable")
+    assert response.status_code == 200
+    soup = Soup(response.text, "html.parser")
+    column_stats_sidebar = soup.select_one(".column-stats-sidebar")
+    assert column_stats_sidebar is not None
+    h3 = column_stats_sidebar.find("h3")
+    assert h3 is not None
+    assert h3.text.strip() == "Column Statistics"
+
+
+@pytest.mark.asyncio
+async def test_column_stats_column_types(ds_client):
+    response = await ds_client.get("/fixtures/facetable")
+    assert response.status_code == 200
+    soup = Soup(response.text, "html.parser")
+    table = soup.select_one(".column-stats-table")
+    assert table is not None
+
+    rows = table.select("tbody tr")
+    assert len(rows) > 0
+
+    column_stats = {}
+    for row in rows:
+        cols = row.select("td")
+        if len(cols) >= 2:
+            name = cols[0].text.strip()
+            type_cell = cols[1]
+            type_code = type_cell.find("code")
+            column_type = type_code.text.strip().lower() if type_code else None
+            column_stats[name] = column_type
+
+    assert "pk" in column_stats
+    assert column_stats["pk"] == "integer"
+    assert "created" in column_stats
+    assert column_stats["created"] == "text"
+    assert "planet_int" in column_stats
+    assert column_stats["planet_int"] == "integer"
+    assert "state" in column_stats
+    assert column_stats["state"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_column_stats_null_rate_and_count(ds_client):
+    response = await ds_client.get("/fixtures/facetable")
+    assert response.status_code == 200
+    soup = Soup(response.text, "html.parser")
+    table = soup.select_one(".column-stats-table")
+    assert table is not None
+
+    rows = table.select("tbody tr")
+    column_stats = {}
+    for row in rows:
+        cols = row.select("td")
+        if len(cols) >= 3:
+            name = cols[0].text.strip()
+            null_rate_cell = cols[2]
+            column_stats[name] = null_rate_cell.text.strip()
+
+    assert "pk" in column_stats
+    assert "0.0%" in column_stats["pk"]
+
+    assert "distinct_some_null" in column_stats
+    null_rate_text = column_stats["distinct_some_null"]
+    assert "86.7%" in null_rate_text
+    assert "(13)" in null_rate_text
+
+    assert "n" in column_stats
+    null_rate_text_n = column_stats["n"]
+    assert "86.7%" in null_rate_text_n
+    assert "(13)" in null_rate_text_n
+
+
+@pytest.mark.asyncio
+async def test_column_stats_distinct_count(ds_client):
+    response = await ds_client.get("/fixtures/facetable")
+    assert response.status_code == 200
+    soup = Soup(response.text, "html.parser")
+    table = soup.select_one(".column-stats-table")
+    assert table is not None
+
+    rows = table.select("tbody tr")
+    column_stats = {}
+    for row in rows:
+        cols = row.select("td")
+        if len(cols) >= 4:
+            name = cols[0].text.strip()
+            distinct_cell = cols[3]
+            distinct_link = distinct_cell.find("a")
+            if distinct_link:
+                column_stats[name] = {
+                    "count": distinct_link.text.strip(),
+                    "href": distinct_link.get("href"),
+                }
+            else:
+                column_stats[name] = {"count": distinct_cell.text.strip(), "href": None}
+
+    assert "pk" in column_stats
+    assert column_stats["pk"]["count"] == "15"
+    assert column_stats["pk"]["href"] is not None
+    assert "_facet=pk" in column_stats["pk"]["href"]
+
+    assert "state" in column_stats
+    assert column_stats["state"]["count"] == "3"
+    assert column_stats["state"]["href"] is not None
+    assert "_facet=state" in column_stats["state"]["href"]
+
+    assert "distinct_some_null" in column_stats
+    assert column_stats["distinct_some_null"]["count"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_column_stats_facet_link_clickable(ds_client):
+    response = await ds_client.get("/fixtures/facetable")
+    assert response.status_code == 200
+    soup = Soup(response.text, "html.parser")
+    table = soup.select_one(".column-stats-table")
+    assert table is not None
+
+    state_row = None
+    for row in table.select("tbody tr"):
+        cols = row.select("td")
+        if cols and cols[0].text.strip() == "state":
+            state_row = row
+            break
+
+    assert state_row is not None
+    distinct_cell = state_row.select("td")[3]
+    distinct_link = distinct_cell.find("a")
+    assert distinct_link is not None
+
+    href = distinct_link.get("href")
+    assert href is not None
+    assert "_facet=state" in href
+
+    parsed_url = urllib.parse.urlparse(href)
+    relative_path = parsed_url.path + "?" + parsed_url.query
+    facet_response = await ds_client.get(relative_path)
+    assert facet_response.status_code == 200
+    facet_soup = Soup(facet_response.text, "html.parser")
+    facet_results = facet_soup.select(".facet-results")
+    assert len(facet_results) > 0
+
+
+@pytest.mark.parametrize("allow_facet", (True, False))
+def test_column_stats_facet_link_obeys_allow_facet(allow_facet):
+    with make_app_client(settings={"allow_facet": allow_facet}) as client:
+        response = client.get("/fixtures/facetable")
+        assert response.status == 200
+        soup = Soup(response.body, "html.parser")
+        table = soup.select_one(".column-stats-table")
+        assert table is not None
+
+        state_row = None
+        for row in table.select("tbody tr"):
+            cols = row.select("td")
+            if cols and cols[0].text.strip() == "state":
+                state_row = row
+                break
+
+        assert state_row is not None
+        distinct_cell = state_row.select("td")[3]
+        distinct_link = distinct_cell.find("a")
+
+        if allow_facet:
+            assert distinct_link is not None
+            assert "_facet=state" in distinct_link.get("href")
+        else:
+            assert distinct_link is None
+
