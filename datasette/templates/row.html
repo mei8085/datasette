@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             try {
-                const response = await fetch('/{{ database }}/{{ table }}/{{ pk_path }}/-/history-diff?history_id=' + historyId);
+                const response = await fetch('{{ base_url }}{{ database }}/{{ table }}/{{ pk_path }}/-/history-diff?history_id=' + historyId);
                 const data = await response.json();
                 
                 if (data.ok) {
@@ -337,7 +337,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             try {
-                const response = await fetch('/{{ database }}/{{ table }}/{{ pk_path }}/-/revert', {
+                const response = await fetch('{{ base_url }}{{ database }}/{{ table }}/{{ pk_path }}/-/revert', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
