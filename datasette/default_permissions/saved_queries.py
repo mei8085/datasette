@@ -22,6 +22,9 @@ from datasette.resources import QueryResource
 SHORTLINK_CHARS = string.ascii_lowercase + string.ascii_uppercase + string.digits
 SHORTLINK_LENGTH = 8
 
+import re
+SLUG_PATTERN = re.compile(r"^[^\/\.]+$")
+
 
 async def _ensure_saved_queries_table(internal_db):
     """Ensure the saved_queries table exists."""
@@ -66,13 +69,29 @@ async def save_query(
     internal_db = datasette.get_internal_database()
     await _ensure_saved_queries_table(internal_db)
 
-    if slug is None:
-        slug = generate_shortlink()
-        while await _slug_exists(internal_db, slug):
-            slug = generate_shortlink()
-    else:
+    if slug is not None:
+        slug = slug.strip()
+        if not slug:
+            raise ValueError("Shortlink alias cannot be empty")
+
+        if not SLUG_PATTERN.match(slug):
+            raise ValueError(
+                f"Shortlink alias '{slug}' is invalid. Aliases cannot contain '.' or '/' characters."
+            )
+
         if await _slug_exists(internal_db, slug):
             raise ValueError(f"Shortlink alias '{slug}' already exists")
+
+        if await _canned_query_exists(datasette, database_name, slug):
+            raise ValueError(
+                f"Shortlink alias '{slug}' conflicts with an existing canned query"
+            )
+    else:
+        slug = generate_shortlink()
+        while await _slug_exists(internal_db, slug) or await _canned_query_exists(
+            datasette, database_name, slug
+        ):
+            slug = generate_shortlink()
 
     params_json = json.dumps(params) if params else None
 
@@ -205,6 +224,14 @@ async def _slug_exists(internal_db, slug: str) -> bool:
         [slug],
     )
     return len(list(result.rows)) > 0
+
+
+async def _canned_query_exists(
+    datasette: "Datasette", database_name: str, slug: str
+) -> bool:
+    """Check if a canned query with the same name exists."""
+    canned_queries = await datasette.get_canned_queries(database_name, actor=None)
+    return slug in canned_queries
 
 
 @hookimpl

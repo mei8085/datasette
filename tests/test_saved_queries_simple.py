@@ -127,3 +127,82 @@ async def test_table_auto_creation():
     
     deleted = await delete_saved_query(ds, "nonexistent")
     assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_slug_validation_dot():
+    """Test that slugs with dots are rejected."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query
+    
+    with pytest.raises(ValueError, match="invalid"):
+        await save_query(ds, "test_db", "SELECT 1", slug="invalid.slug")
+
+
+@pytest.mark.asyncio
+async def test_slug_validation_slash():
+    """Test that slugs with slashes are rejected."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query
+    
+    with pytest.raises(ValueError, match="invalid"):
+        await save_query(ds, "test_db", "SELECT 1", slug="invalid/slug")
+
+
+@pytest.mark.asyncio
+async def test_slug_validation_empty():
+    """Test that empty slugs are rejected."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query
+    
+    with pytest.raises(ValueError, match="cannot be empty"):
+        await save_query(ds, "test_db", "SELECT 1", slug="")
+
+
+@pytest.mark.asyncio
+async def test_slug_validation_whitespace():
+    """Test that whitespace-only slugs are rejected."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query
+    
+    with pytest.raises(ValueError, match="cannot be empty"):
+        await save_query(ds, "test_db", "SELECT 1", slug="   ")
+
+
+@pytest.mark.asyncio
+async def test_valid_slugs():
+    """Test that valid slugs are accepted."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query, get_saved_query
+    
+    # Various valid slugs
+    valid_slugs = [
+        "simple",
+        "with-dash",
+        "with_underscore",
+        "mixedCase123",
+        "query-1",
+        "test_2",
+    ]
+    
+    for slug in valid_slugs:
+        saved_slug = await save_query(ds, "test_db", f"SELECT '{slug}'", slug=slug)
+        assert saved_slug == slug
+        
+        saved = await get_saved_query(ds, slug)
+        assert saved is not None
+        assert saved["slug"] == slug
+
+
+@pytest.mark.asyncio
+async def test_canned_query_conflict():
+    """Test that saving a query with a name that conflicts with an existing canned query is rejected."""
+    ds = Datasette([])
+    from datasette.default_permissions import save_query
+    
+    # First, save a query
+    await save_query(ds, "test_db", "SELECT 1", slug="conflicting_query")
+    
+    # Now try to save another query with the same name
+    with pytest.raises(ValueError, match="conflicts"):
+        await save_query(ds, "test_db", "SELECT 2", slug="conflicting_query")
