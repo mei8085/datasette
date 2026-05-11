@@ -62,7 +62,7 @@ class ActorContext:
         action: str,
         parent: str | None = None,
         include_is_private: bool = False,
-        limit: int | None = None,
+        limit: int = 100,
     ):
         """Get all resources the actor can access for the given action."""
         return await self.datasette.allowed_resources(
