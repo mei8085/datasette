@@ -67,6 +67,14 @@ async def init_internal_db(db):
         FOREIGN KEY (database_name) REFERENCES catalog_databases(database_name),
         FOREIGN KEY (database_name, table_name) REFERENCES catalog_tables(database_name, table_name)
     );
+    CREATE TABLE IF NOT EXISTS saved_queries (
+        slug TEXT PRIMARY KEY,
+        database_name TEXT NOT NULL,
+        sql TEXT NOT NULL,
+        params TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (database_name) REFERENCES catalog_databases(database_name)
+    );
     """).strip()
     await db.execute_write_script(create_tables_sql)
     await initialize_metadata_tables(db)

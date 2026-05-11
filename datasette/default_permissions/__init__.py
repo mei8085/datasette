@@ -37,6 +37,13 @@ from .defaults import (
     default_action_permissions_sql as default_action_permissions_sql,
     DEFAULT_ALLOW_ACTIONS as DEFAULT_ALLOW_ACTIONS,
 )
+from .saved_queries import (
+    save_query as save_query,
+    get_saved_query as get_saved_query,
+    get_saved_queries as get_saved_queries,
+    delete_saved_query as delete_saved_query,
+    generate_shortlink as generate_shortlink,
+)
 
 
 @hookimpl

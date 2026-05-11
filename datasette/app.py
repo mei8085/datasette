@@ -62,6 +62,8 @@ from .views.special import (
     InstanceSchemaView,
     DatabaseSchemaView,
     TableSchemaView,
+    SaveQueryView,
+    ShortlinkRedirectView,
 )
 from .views.table import (
     TableInsertView,
@@ -2241,6 +2243,10 @@ class Datasette:
             r"/-/patterns$",
         )
         add_route(
+            wrap_view(ShortlinkRedirectView, self),
+            r"/-/q/(?P<slug>[^\/\.]+)$",
+        )
+        add_route(
             wrap_view(database_download, self),
             r"/(?P<database>[^\/\.]+)\.db$",
         )
@@ -2256,6 +2262,10 @@ class Datasette:
         add_route(
             wrap_view(QueryView, self),
             r"/(?P<database>[^\/\.]+)/-/query(\.(?P<format>\w+))?$",
+        )
+        add_route(
+            SaveQueryView.as_view(self),
+            r"/(?P<database>[^\/\.]+)/-/save-query$",
         )
         add_route(
             wrap_view(table_view, self),

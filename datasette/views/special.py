@@ -1158,3 +1158,73 @@ class TableSchemaView(SchemaBaseView):
             return await self.format_html_response(
                 request, schemas, table_name=table_name
             )
+
+
+class SaveQueryView(BaseView):
+    """
+    Save a SQL query with a shortlink alias.
+    """
+
+    name = "save_query"
+
+    async def post(self, request):
+        from datasette.default_permissions import save_query
+
+        await self.ds.ensure_permission(
+            action="execute-sql",
+            resource=DatabaseResource(database=request.url_vars["database"]),
+            actor=request.actor,
+        )
+
+        form = await request.form()
+        sql = form.get("sql", "").strip()
+        slug = form.get("slug", "").strip() or None
+
+        if not sql:
+            return Response.json(
+                {"ok": False, "error": "SQL query is required"}, status=400
+            )
+
+        database_name = request.url_vars["database"]
+
+        try:
+            saved_slug = await save_query(
+                self.ds, database_name, sql, None, slug
+            )
+        except ValueError as e:
+            return Response.json(
+                {"ok": False, "error": str(e)}, status=400
+            )
+
+        return Response.json(
+            {
+                "ok": True,
+                "slug": saved_slug,
+                "url": f"/-/q/{saved_slug}",
+            }
+        )
+
+
+class ShortlinkRedirectView(View):
+    """
+    Redirect a shortlink to the corresponding query execution.
+
+    This redirects to the canned query path /{database}/{slug},
+    which will use the existing canned query permission checks.
+    """
+
+    async def get(self, request, datasette):
+        from datasette.default_permissions import get_saved_query
+        from urllib.parse import urlencode
+
+        slug = request.url_vars["slug"]
+        saved_query = await get_saved_query(datasette, slug)
+
+        if saved_query is None:
+            return Response.text("Shortlink not found", status=404)
+
+        redirect_url = f"/{saved_query['database_name']}/{slug}"
+        if saved_query.get("params"):
+            redirect_url += "?" + urlencode(saved_query["params"])
+
+        return Response.redirect(redirect_url)
