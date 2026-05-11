@@ -71,6 +71,7 @@ from .views.table import (
     table_view,
 )
 from .views.row import RowView, RowDeleteView, RowUpdateView
+from .views.comments import RowCommentsView, RowCommentDeleteView
 from .renderer import json_renderer
 from .url_builder import Urls
 from .database import Database, QueryInterrupted
@@ -2292,6 +2293,14 @@ class Datasette:
         add_route(
             RowUpdateView.as_view(self),
             r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/update$",
+        )
+        add_route(
+            RowCommentsView.as_view(self),
+            r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/comments$",
+        )
+        add_route(
+            RowCommentDeleteView.as_view(self),
+            r"/-/comments/(?P<comment_id>\d+)$",
         )
         return [
             # Compile any strings to regular expressions

@@ -112,6 +112,25 @@ async def initialize_metadata_tables(db):
             config TEXT,
             PRIMARY KEY (database_name, resource_name, column_name)
         );
+        
+        CREATE TABLE IF NOT EXISTS row_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            database_name TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            pk_values TEXT NOT NULL,
+            actor_id TEXT,
+            actor_name TEXT NOT NULL,
+            comment_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (database_name) REFERENCES catalog_databases(database_name)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_row_comments_row 
+        ON row_comments(database_name, table_name, pk_values);
+        
+        CREATE INDEX IF NOT EXISTS idx_row_comments_actor 
+        ON row_comments(actor_id);
             """))
 
 
