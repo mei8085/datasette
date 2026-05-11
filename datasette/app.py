@@ -70,7 +70,14 @@ from .views.table import (
     TableDropView,
     table_view,
 )
-from .views.row import RowView, RowDeleteView, RowUpdateView
+from .views.row import (
+    RowView,
+    RowDeleteView,
+    RowUpdateView,
+    RowHistoryView,
+    RowHistoryDiffView,
+    RowRevertView,
+)
 from .renderer import json_renderer
 from .url_builder import Urls
 from .database import Database, QueryInterrupted
@@ -2292,6 +2299,18 @@ class Datasette:
         add_route(
             RowUpdateView.as_view(self),
             r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/update$",
+        )
+        add_route(
+            RowHistoryView.as_view(self),
+            r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/history$",
+        )
+        add_route(
+            RowHistoryDiffView.as_view(self),
+            r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/history-diff$",
+        )
+        add_route(
+            RowRevertView.as_view(self),
+            r"/(?P<database>[^\/\.]+)/(?P<table>[^/]+?)/(?P<pks>[^/]+?)/-/revert$",
         )
         return [
             # Compile any strings to regular expressions

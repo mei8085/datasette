@@ -67,6 +67,16 @@ async def init_internal_db(db):
         FOREIGN KEY (database_name) REFERENCES catalog_databases(database_name),
         FOREIGN KEY (database_name, table_name) REFERENCES catalog_tables(database_name, table_name)
     );
+    CREATE TABLE IF NOT EXISTS row_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        database_name TEXT NOT NULL,
+        table_name TEXT NOT NULL,
+        pk_values TEXT NOT NULL,
+        row_data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        actor TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_row_history ON row_history(database_name, table_name, pk_values, created_at DESC);
     """).strip()
     await db.execute_write_script(create_tables_sql)
     await initialize_metadata_tables(db)

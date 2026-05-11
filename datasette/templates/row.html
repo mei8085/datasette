@@ -10,6 +10,104 @@
     .rows-and-columns td:nth-of-type({{ loop.index }}):before { content: "{{ column|escape_css_string }}"; }
 {% endfor %}
 }
+.row-tabs {
+    border-bottom: 2px solid #e0e0e0;
+    margin-bottom: 1em;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+.row-tabs a {
+    padding: 0.75em 1.25em;
+    text-decoration: none;
+    color: #333;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s;
+    font-weight: 500;
+    cursor: pointer;
+}
+.row-tabs a:hover {
+    background-color: #f5f5f5;
+    border-bottom-color: #999;
+}
+.row-tabs a.active {
+    color: #0066cc;
+    border-bottom-color: #0066cc;
+    background-color: #f0f7ff;
+}
+.tab-content {
+    display: none;
+}
+.tab-content.active {
+    display: block;
+}
+.diff-added {
+    background-color: #e6ffed;
+}
+.diff-removed {
+    background-color: #ffeef0;
+}
+.diff-changed {
+    background-color: #fff7e6;
+}
+.history-item {
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    margin-bottom: 1em;
+    padding: 1em;
+}
+.history-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5em;
+}
+.history-item-meta {
+    color: #666;
+    font-size: 0.9em;
+}
+.diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1em;
+}
+.diff-table th, .diff-table td {
+    padding: 0.5em;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+.diff-table th {
+    background-color: #f5f5f5;
+}
+.revert-form {
+    display: inline;
+}
+.revert-btn {
+    background-color: #ff6b6b;
+    color: white;
+    border: none;
+    padding: 0.5em 1em;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.revert-btn:hover {
+    background-color: #ee5a5a;
+}
+@media only screen and (max-width: 576px) {
+    .row-tabs {
+        flex-direction: column;
+        gap: 0;
+    }
+    .row-tabs a {
+        border-bottom: 1px solid #e0e0e0;
+        margin-bottom: 0;
+    }
+    .row-tabs a.active {
+        border-left: 3px solid #0066cc;
+        border-bottom: 1px solid #e0e0e0;
+    }
+}
 </style>
 {% endblock %}
 
@@ -29,21 +127,178 @@
 
 {% block description_source_license %}{% include "_description_source_license.html" %}{% endblock %}
 
-<p>This data as {% for name, url in renderers.items() %}<a href="{{ url }}">{{ name }}</a>{{ ", " if not loop.last }}{% endfor %}</p>
+<nav class="row-tabs">
+    <a href="#" data-tab="row" class="active">Row</a>
+    <a href="#" data-tab="history">History ({{ row_history|length }})</a>
+</nav>
 
-{% include custom_table_templates %}
+<div id="tab-row" class="tab-content active">
+    <p>This data as {% for name, url in renderers.items() %}<a href="{{ url }}">{{ name }}</a>{{ ", " if not loop.last }}{% endfor %}</p>
 
-{% if foreign_key_tables %}
-    <h2>Links from other tables</h2>
-    <ul>
-        {% for other in foreign_key_tables %}
-            <li>
-                <a href="{{ other.link }}">
-                    {{ "{:,}".format(other.count) }} row{% if other.count == 1 %}{% else %}s{% endif %}</a>
-                from {{ other.other_column }} in {{ other.other_table }}
-            </li>
+    {% include custom_table_templates %}
+
+    {% if foreign_key_tables %}
+        <h2>Links from other tables</h2>
+        <ul>
+            {% for other in foreign_key_tables %}
+                <li>
+                    <a href="{{ other.link }}">
+                        {{ "{:,}".format(other.count) }} row{% if other.count == 1 %}{% else %}s{% endif %}</a>
+                    from {{ other.other_column }} in {{ other.other_table }}
+                </li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+</div>
+
+<div id="tab-history" class="tab-content">
+    {% if row_history %}
+        {% for item in row_history %}
+        <div class="history-item">
+            <div class="history-item-header">
+                <div class="history-item-meta">
+                    <strong>Version {{ item.id }}</strong> - {{ item.created_at }}
+                    {% if item.actor %}
+                        by {{ item.actor.id if item.actor.id else item.actor }}
+                    {% endif %}
+                </div>
+                <div>
+                    <a href="#" class="show-diff" data-history-id="{{ item.id }}" style="margin-right: 0.5em;">Show Diff</a>
+                    <form class="revert-form" data-history-id="{{ item.id }}" data-pks="{{ ', '.join(primary_key_values) }}">
+                        <button type="button" class="revert-btn">Revert to this version</button>
+                    </form>
+                </div>
+            </div>
+            <div class="history-data" style="display: none;">
+                <pre style="background: #f5f5f5; padding: 0.5em; overflow-x: auto; font-size: 0.9em;">{{ item.row_data }}</pre>
+            </div>
+            <div class="diff-container" style="display: none;"></div>
+        </div>
         {% endfor %}
-    </ul>
-{% endif %}
+    {% else %}
+        <p>No history available. Edit this row to create history snapshots.</p>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tabs = document.querySelectorAll('.row-tabs a');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', function(e) {
+            e.preventDefault();
+            const targetTab = this.getAttribute('data-tab');
+            
+            tabs.forEach(t => t.classList.remove('active'));
+            tabContents.forEach(tc => tc.classList.remove('active'));
+            
+            this.classList.add('active');
+            document.getElementById('tab-' + targetTab).classList.add('active');
+        });
+    });
+
+    document.querySelectorAll('.show-diff').forEach(link => {
+        link.addEventListener('click', async function(e) {
+            e.preventDefault();
+            const historyId = this.getAttribute('data-history-id');
+            const container = this.closest('.history-item').querySelector('.diff-container');
+            const historyData = this.closest('.history-item').querySelector('.history-data');
+            
+            if (container.style.display === 'block') {
+                container.style.display = 'none';
+                return;
+            }
+
+            try {
+                const response = await fetch('{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/history-diff?history_id=' + historyId);
+                const data = await response.json();
+                
+                if (data.ok) {
+                    let html = '<h4>Changes:</h4>';
+                    
+                    if (Object.keys(data.diff.changed).length > 0) {
+                        html += '<h5>Changed:</h5>';
+                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Old Value</th><th>New Value</th></tr></thead><tbody>';
+                        for (const [col, vals] of Object.entries(data.diff.changed)) {
+                            html += `<tr class="diff-changed"><td>${col}</td><td>${vals.old}</td><td>${vals.new}</td></tr>`;
+                        }
+                        html += '</tbody></table>';
+                    }
+                    
+                    if (Object.keys(data.diff.added).length > 0) {
+                        html += '<h5>Added:</h5>';
+                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Value</th></tr></thead><tbody>';
+                        for (const [col, val] of Object.entries(data.diff.added)) {
+                            html += `<tr class="diff-added"><td>${col}</td><td>${val}</td></tr>`;
+                        }
+                        html += '</tbody></table>';
+                    }
+                    
+                    if (Object.keys(data.diff.removed).length > 0) {
+                        html += '<h5>Removed:</h5>';
+                        html += '<table class="diff-table"><thead><tr><th>Column</th><th>Value</th></tr></thead><tbody>';
+                        for (const [col, val] of Object.entries(data.diff.removed)) {
+                            html += `<tr class="diff-removed"><td>${col}</td><td>${val}</td></tr>`;
+                        }
+                        html += '</tbody></table>';
+                    }
+                    
+                    if (Object.keys(data.diff.changed).length === 0 && 
+                        Object.keys(data.diff.added).length === 0 && 
+                        Object.keys(data.diff.removed).length === 0) {
+                        html += '<p><em>No changes detected (same as comparison version)</em></p>';
+                    }
+                    
+                    container.innerHTML = html;
+                    container.style.display = 'block';
+                    historyData.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading diff:', error);
+                container.innerHTML = '<p style="color: red;">Error loading diff</p>';
+                container.style.display = 'block';
+            }
+        });
+    });
+
+    document.querySelectorAll('.revert-btn').forEach(btn => {
+        btn.addEventListener('click', async function(e) {
+            e.preventDefault();
+            const form = this.closest('.revert-form');
+            const historyId = form.getAttribute('data-history-id');
+            
+            if (!confirm('Are you sure you want to revert to this version? This will create a new history entry.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('{{ database }}/{{ table }}/{{ primary_key_values|join(",") }}/-/revert', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        history_id: parseInt(historyId),
+                        return: true
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.ok) {
+                    alert('Successfully reverted to version ' + historyId);
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + (data.errors ? data.errors.join(', ') : 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error reverting:', error);
+                alert('Error reverting to version');
+            }
+        });
+    });
+});
+</script>
 
 {% endblock %}

@@ -11,10 +11,88 @@ from datasette.utils import (
     escape_sqlite,
 )
 from datasette.plugins import pm
+from datetime import datetime, timezone
 import json
 import markupsafe
 import sqlite_utils
 from .table import display_columns_and_rows, _get_extras
+
+
+async def save_row_history(datasette, database_name, table_name, pk_values, row_dict, actor):
+    internal_db = datasette.get_internal_database()
+    pk_values_str = json.dumps(pk_values, default=str)
+    row_data_str = json.dumps(row_dict, default=str)
+    created_at = datetime.now(timezone.utc).isoformat()
+    actor_str = json.dumps(actor, default=str) if actor else None
+    await internal_db.execute_write(
+        """
+        INSERT INTO row_history (database_name, table_name, pk_values, row_data, created_at, actor)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [database_name, table_name, pk_values_str, row_data_str, created_at, actor_str],
+    )
+
+
+async def get_row_history(datasette, database_name, table_name, pk_values, limit=100):
+    internal_db = datasette.get_internal_database()
+    pk_values_str = json.dumps(pk_values, default=str)
+    results = await internal_db.execute(
+        """
+        SELECT id, row_data, created_at, actor FROM row_history
+        WHERE database_name = ? AND table_name = ? AND pk_values = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        [database_name, table_name, pk_values_str, limit],
+    )
+    history = []
+    for row in results.rows:
+        history.append(
+            {
+                "id": row["id"],
+                "row_data": json.loads(row["row_data"]),
+                "created_at": row["created_at"],
+                "actor": json.loads(row["actor"]) if row["actor"] else None,
+            }
+        )
+    return history
+
+
+async def get_history_version(datasette, history_id):
+    internal_db = datasette.get_internal_database()
+    results = await internal_db.execute(
+        "SELECT database_name, table_name, pk_values, row_data, created_at, actor FROM row_history WHERE id = ?",
+        [history_id],
+    )
+    rows = results.rows
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "database_name": row["database_name"],
+        "table_name": row["table_name"],
+        "pk_values": json.loads(row["pk_values"]),
+        "row_data": json.loads(row["row_data"]),
+        "created_at": row["created_at"],
+        "actor": json.loads(row["actor"]) if row["actor"] else None,
+    }
+
+
+def compare_rows(old_row, new_row):
+    diff = {"added": {}, "removed": {}, "changed": {}, "unchanged": {}}
+    all_keys = set(old_row.keys()) | set(new_row.keys())
+    for key in all_keys:
+        old_val = old_row.get(key)
+        new_val = new_row.get(key)
+        if key not in old_row:
+            diff["added"][key] = new_val
+        elif key not in new_row:
+            diff["removed"][key] = old_val
+        elif old_val != new_val:
+            diff["changed"][key] = {"old": old_val, "new": new_val}
+        else:
+            diff["unchanged"][key] = old_val
+    return diff
 
 
 class RowView(DataView):
@@ -128,6 +206,10 @@ class RowView(DataView):
                 if extra_links:
                     row_actions.extend(extra_links)
 
+            row_dict = dict(rows[0])
+            history = await get_row_history(
+                self.ds, database, table, pk_values
+            )
             return {
                 "private": private,
                 "columns": reordered_columns,
@@ -152,6 +234,9 @@ class RowView(DataView):
                     row=rows[0],
                 ),
                 "metadata": {},
+                "row_dict": row_dict,
+                "row_history": history,
+                "current_row": row_dict,
             }
 
         data = {
@@ -384,9 +469,223 @@ class RowUpdateView(BaseView):
         ):
             return _error(["Permission denied for alter-table"], 403)
 
+        # Save current state to history before updating
+        current_results = await resolved.db.execute(
+            resolved.sql, resolved.params, truncate=True
+        )
+        current_row = current_results.dicts()[0]
+        await save_row_history(
+            self.ds,
+            resolved.db.name,
+            resolved.table,
+            resolved.pk_values,
+            current_row,
+            request.actor,
+        )
+
         def update_row(conn):
             sqlite_utils.Database(conn)[resolved.table].update(
                 resolved.pk_values, update, alter=alter
+            )
+
+        try:
+            await resolved.db.execute_write_fn(update_row, request=request)
+        except Exception as e:
+            return _error([str(e)], 400)
+
+        result = {"ok": True}
+        if data.get("return"):
+            results = await resolved.db.execute(
+                resolved.sql, resolved.params, truncate=True
+            )
+            result["row"] = results.dicts()[0]
+
+        await self.ds.track_event(
+            UpdateRowEvent(
+                actor=request.actor,
+                database=resolved.db.name,
+                table=resolved.table,
+                pks=resolved.pk_values,
+            )
+        )
+
+        return Response.json(result, status=200)
+
+
+class RowHistoryView(BaseView):
+    name = "row-history"
+
+    def __init__(self, datasette):
+        self.ds = datasette
+
+    async def get(self, request):
+        ok, resolved = await _resolve_row_and_check_permission(
+            self.ds, request, "view-table"
+        )
+        if not ok:
+            return resolved
+
+        history = await get_row_history(
+            self.ds, resolved.db.name, resolved.table, resolved.pk_values
+        )
+
+        # Get current row
+        current_results = await resolved.db.execute(
+            resolved.sql, resolved.params, truncate=True
+        )
+        current_row = current_results.dicts()[0]
+
+        result = {
+            "ok": True,
+            "database": resolved.db.name,
+            "table": resolved.table,
+            "primary_keys": resolved.pks,
+            "primary_key_values": resolved.pk_values,
+            "current_row": current_row,
+            "history": history,
+        }
+        return Response.json(result, status=200)
+
+
+class RowHistoryDiffView(BaseView):
+    name = "row-history-diff"
+
+    def __init__(self, datasette):
+        self.ds = datasette
+
+    async def get(self, request):
+        ok, resolved = await _resolve_row_and_check_permission(
+            self.ds, request, "view-table"
+        )
+        if not ok:
+            return resolved
+
+        history_id = request.args.get("history_id")
+        if not history_id:
+            return _error(["history_id is required"], 400)
+
+        try:
+            history_id = int(history_id)
+        except ValueError:
+            return _error(["history_id must be an integer"], 400)
+
+        version = await get_history_version(self.ds, history_id)
+        if not version:
+            return _error(["History version not found"], 404)
+
+        # Verify this version belongs to the same row
+        if (
+            version["database_name"] != resolved.db.name
+            or version["table_name"] != resolved.table
+            or version["pk_values"] != resolved.pk_values
+        ):
+            return _error(["History version does not match this row"], 400)
+
+        # Get current row
+        current_results = await resolved.db.execute(
+            resolved.sql, resolved.params, truncate=True
+        )
+        current_row = current_results.dicts()[0]
+
+        # Compare with previous version or current
+        history = await get_row_history(
+            self.ds, resolved.db.name, resolved.table, resolved.pk_values
+        )
+        previous_version = None
+        for i, h in enumerate(history):
+            if h["id"] == history_id:
+                if i + 1 < len(history):
+                    previous_version = history[i + 1]
+                break
+
+        if previous_version:
+            diff = compare_rows(previous_version["row_data"], version["row_data"])
+            comparison_with = previous_version
+        else:
+            diff = compare_rows(version["row_data"], current_row)
+            comparison_with = {
+                "id": None,
+                "row_data": current_row,
+                "created_at": None,
+                "actor": None,
+            }
+
+        result = {
+            "ok": True,
+            "database": resolved.db.name,
+            "table": resolved.table,
+            "primary_keys": resolved.pks,
+            "primary_key_values": resolved.pk_values,
+            "current_row": current_row,
+            "version": version,
+            "comparison_with": comparison_with,
+            "diff": diff,
+        }
+        return Response.json(result, status=200)
+
+
+class RowRevertView(BaseView):
+    name = "row-revert"
+
+    def __init__(self, datasette):
+        self.ds = datasette
+
+    async def post(self, request):
+        ok, resolved = await _resolve_row_and_check_permission(
+            self.ds, request, "update-row"
+        )
+        if not ok:
+            return resolved
+
+        body = await request.post_body()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as e:
+            return _error(["Invalid JSON: {}".format(e)])
+
+        if "history_id" not in data:
+            return _error(["history_id is required"], 400)
+
+        try:
+            history_id = int(data["history_id"])
+        except ValueError:
+            return _error(["history_id must be an integer"], 400)
+
+        version = await get_history_version(self.ds, history_id)
+        if not version:
+            return _error(["History version not found"], 404)
+
+        # Verify this version belongs to the same row
+        if (
+            version["database_name"] != resolved.db.name
+            or version["table_name"] != resolved.table
+            or version["pk_values"] != resolved.pk_values
+        ):
+            return _error(["History version does not match this row"], 400)
+
+        # Save current state before reverting
+        current_results = await resolved.db.execute(
+            resolved.sql, resolved.params, truncate=True
+        )
+        current_row = current_results.dicts()[0]
+        await save_row_history(
+            self.ds,
+            resolved.db.name,
+            resolved.table,
+            resolved.pk_values,
+            current_row,
+            request.actor,
+        )
+
+        # Prepare update data (exclude primary keys as they shouldn't change)
+        pks = set(resolved.pks)
+        update_data = {
+            k: v for k, v in version["row_data"].items() if k not in pks
+        }
+
+        def update_row(conn):
+            sqlite_utils.Database(conn)[resolved.table].update(
+                resolved.pk_values, update_data
             )
 
         try:
