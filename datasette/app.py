@@ -186,6 +186,16 @@ SETTINGS = (
     ),
     Setting("sql_time_limit_ms", 1000, "Time limit for a SQL query in milliseconds"),
     Setting(
+        "sql_row_limit",
+        100000,
+        "Maximum number of rows to scan in a SQL query before returning partial results",
+    ),
+    Setting(
+        "sql_partial_results",
+        True,
+        "Return partial results when query exceeds time or row limits",
+    ),
+    Setting(
         "default_facet_size", 30, "Number of values to return for requested facets"
     ),
     Setting("facet_time_limit_ms", 200, "Time limit for calculating a requested facet"),
@@ -484,6 +494,8 @@ class Datasette:
             )
         self.max_returned_rows = self.setting("max_returned_rows")
         self.sql_time_limit_ms = self.setting("sql_time_limit_ms")
+        self.sql_row_limit = self.setting("sql_row_limit")
+        self.sql_partial_results = self.setting("sql_partial_results")
         self.page_size = self.setting("default_page_size")
         # Execute plugins in constructor, to ensure they are available
         # when the rest of `datasette inspect` executes

@@ -475,6 +475,8 @@ class Database:
 
         def sql_operation_in_thread(conn):
             time_limit_ms = self.ds.sql_time_limit_ms
+            row_limit = self.ds.sql_row_limit
+            partial_results_enabled = self.ds.sql_partial_results
             if custom_time_limit and custom_time_limit < time_limit_ms:
                 time_limit_ms = custom_time_limit
 
@@ -485,7 +487,23 @@ class Database:
                     max_returned_rows = self.ds.max_returned_rows
                     if max_returned_rows == page_size:
                         max_returned_rows += 1
-                    if max_returned_rows and truncate:
+
+                    rows = []
+                    truncated = False
+                    reason = None
+
+                    if partial_results_enabled and row_limit:
+                        effective_limit = min(row_limit, max_returned_rows) if (max_returned_rows and truncate) else row_limit
+                        while True:
+                            batch = cursor.fetchmany(1000)
+                            if not batch:
+                                break
+                            rows.extend(batch)
+                            if len(rows) > effective_limit:
+                                truncated = True
+                                reason = "row_limit_exceeded"
+                                break
+                    elif max_returned_rows and truncate:
                         rows = cursor.fetchmany(max_returned_rows + 1)
                         truncated = len(rows) > max_returned_rows
                         rows = rows[:max_returned_rows]
@@ -494,6 +512,10 @@ class Database:
                         truncated = False
                 except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
                     if e.args == ("interrupted",):
+                        if partial_results_enabled and "rows" in locals() and rows:
+                            raise QueryInterruptedWithResults(
+                                rows, True, cursor.description, "time_limit_exceeded"
+                            )
                         raise QueryInterrupted(e, sql, params)
                     if log_sql_errors:
                         sys.stderr.write(
@@ -503,6 +525,11 @@ class Database:
                         )
                         sys.stderr.flush()
                     raise
+
+            if partial_results_enabled and truncated and reason == "row_limit_exceeded":
+                raise QueryInterruptedWithResults(
+                    rows, True, cursor.description, reason
+                )
 
             if truncate:
                 return Results(rows, truncated, cursor.description)
@@ -892,6 +919,17 @@ class QueryInterrupted(Exception):
 
     def __str__(self):
         return "QueryInterrupted: {}".format(self.e)
+
+
+class QueryInterruptedWithResults(Exception):
+    def __init__(self, rows, truncated, description, reason):
+        self.rows = rows
+        self.truncated = truncated
+        self.description = description
+        self.reason = reason
+
+    def __str__(self):
+        return "QueryInterruptedWithResults: {}".format(self.reason)
 
 
 class MultipleValues(Exception):

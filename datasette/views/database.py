@@ -11,7 +11,7 @@ import sqlite_utils
 import textwrap
 
 from datasette.events import AlterTableEvent, CreateTableEvent, InsertRowsEvent
-from datasette.database import QueryInterrupted
+from datasette.database import QueryInterrupted, QueryInterruptedWithResults, Results
 from datasette.resources import DatabaseResource, QueryResource
 from datasette.utils import (
     add_cors_headers,
@@ -614,6 +614,19 @@ class QueryView(View):
                 )
                 columns = results.columns
                 rows = results.rows
+            except QueryInterruptedWithResults as ex:
+                results = Results(ex.rows, ex.truncated, ex.description)
+                columns = results.columns
+                rows = results.rows
+                if ex.reason == "row_limit_exceeded":
+                    warning_message = "Query exceeded row limit. Returned partial results."
+                else:
+                    warning_message = "Query exceeded time limit. Returned partial results."
+                datasette.add_message(
+                    request,
+                    warning_message,
+                    datasette.WARNING,
+                )
             except QueryInterrupted as ex:
                 raise DatasetteError(
                     textwrap.dedent("""
