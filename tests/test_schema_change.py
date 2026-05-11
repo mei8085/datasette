@@ -1,6 +1,5 @@
 import asyncio
 import io
-import json
 import os
 import pytest
 import sys
@@ -25,11 +24,11 @@ def tmp_db():
 
 @pytest.mark.asyncio
 async def test_schema_change_webhook_config(tmp_db):
-    webhook_url = "http://example.com/webhook"
-    ds = Datasette([tmp_db], config={"schema_change_webhook": webhook_url})
+    ds = Datasette([tmp_db], config={"schema_change_webhook": "http://example.com/webhook"})
     await ds.invoke_startup()
     urls = ds._schema_change_webhook_urls()
-    assert urls == [webhook_url]
+    assert urls == ["http://example.com/webhook"]
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -39,6 +38,7 @@ async def test_schema_change_webhook_list_config(tmp_db):
     await ds.invoke_startup()
     urls = ds._schema_change_webhook_urls()
     assert urls == webhook_urls
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -55,6 +55,7 @@ async def test_schema_change_webhook_dict_config(tmp_db):
     await ds.invoke_startup()
     urls = ds._schema_change_webhook_urls()
     assert urls == ["http://example.com/webhook"]
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -63,6 +64,7 @@ async def test_schema_change_check_interval_default(tmp_db):
     await ds.invoke_startup()
     interval = ds._get_schema_check_interval()
     assert interval == 60
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -71,6 +73,7 @@ async def test_schema_change_check_interval_custom(tmp_db):
     await ds.invoke_startup()
     interval = ds._get_schema_check_interval()
     assert interval == 30
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -79,6 +82,7 @@ async def test_schema_change_check_interval_disabled(tmp_db):
     await ds.invoke_startup()
     interval = ds._get_schema_check_interval()
     assert interval == 0
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -104,6 +108,7 @@ async def test_schema_change_event_triggered(tmp_db):
     assert event.name == "schema-change"
     assert event.database == "test"
     assert event.before_schema_version < event.after_schema_version
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -118,6 +123,7 @@ async def test_schema_change_event_not_triggered_on_first_refresh(tmp_db):
         e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
     ]
     assert len(schema_change_events) == 0
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -133,6 +139,7 @@ async def test_schema_change_event_not_triggered_when_no_change(tmp_db):
         e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
     ]
     assert len(schema_change_events) == 0
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -154,6 +161,7 @@ async def test_schema_change_log_output(tmp_db):
     assert "Schema change detected for database test" in stderr_output
     assert "version" in stderr_output
     assert "->" in stderr_output
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -181,6 +189,7 @@ async def test_internal_schema_version_update(tmp_db):
     after_version = results.rows[0]["schema_version"]
 
     assert before_version < after_version
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -191,7 +200,7 @@ async def test_schema_tables_populated_after_change(tmp_db):
 
     internal_db = ds.get_internal_database()
     results = await internal_db.execute(
-        "SELECT COUNT(*) as count FROM columns WHERE database_name = 'test' AND table_name = 'test'"
+        "SELECT COUNT(*) as count FROM catalog_columns WHERE database_name = 'test' AND table_name = 'test'"
     )
     before_count = results.rows[0]["count"]
     assert before_count == 2
@@ -204,10 +213,11 @@ async def test_schema_tables_populated_after_change(tmp_db):
     await ds._refresh_schemas()
 
     results = await internal_db.execute(
-        "SELECT COUNT(*) as count FROM columns WHERE database_name = 'test' AND table_name = 'test'"
+        "SELECT COUNT(*) as count FROM catalog_columns WHERE database_name = 'test' AND table_name = 'test'"
     )
     after_count = results.rows[0]["count"]
     assert after_count == 3
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -298,6 +308,7 @@ async def test_multiple_schema_changes(tmp_db):
     assert len(schema_change_events) == 2
     assert schema_change_events[0].before_schema_version < schema_change_events[0].after_schema_version
     assert schema_change_events[1].before_schema_version < schema_change_events[1].after_schema_version
+    ds.close()
 
 
 @pytest.mark.asyncio
@@ -319,3 +330,4 @@ async def test_no_schema_change_events_on_insert_or_update(tmp_db):
         e for e in ds._tracked_events if isinstance(e, SchemaChangeEvent)
     ]
     assert len(schema_change_events) == 0
+    ds.close()
