@@ -494,14 +494,23 @@ class Database:
 
                     if partial_results_enabled and row_limit:
                         effective_limit = min(row_limit, max_returned_rows) if (max_returned_rows and truncate) else row_limit
+                        batch_size = min(1000, effective_limit)
                         while True:
-                            batch = cursor.fetchmany(1000)
+                            remaining = effective_limit - len(rows)
+                            if remaining <= 0:
+                                truncated = True
+                                reason = "row_limit_exceeded"
+                                break
+                            fetch_size = min(batch_size, remaining)
+                            batch = cursor.fetchmany(fetch_size)
                             if not batch:
                                 break
                             rows.extend(batch)
-                            if len(rows) > effective_limit:
-                                truncated = True
-                                reason = "row_limit_exceeded"
+                            if len(rows) >= effective_limit:
+                                next_batch = cursor.fetchmany(1)
+                                if next_batch:
+                                    truncated = True
+                                    reason = "row_limit_exceeded"
                                 break
                     elif max_returned_rows and truncate:
                         rows = cursor.fetchmany(max_returned_rows + 1)
